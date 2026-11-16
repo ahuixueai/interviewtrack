@@ -83,7 +83,7 @@ Every change is covered by a synthetic regression test (`engine/test/realEmailFi
 
 ## Threats to validity
 
-- **The "after fixes" and "promotional filter" numbers are in-sample.** The fixes were written by studying errors on these 147 emails and then scored on the same 147. Expect lower numbers on unseen mail. A fresh batch has not been evaluated yet.
+- **The "after fixes" and "promotional filter" numbers are in-sample.** The fixes were written by studying errors on these 147 emails and then scored on the same 147. Expect lower numbers on unseen mail. A first unseen pass (2026-11-10, 15 truly unseen emails out of 76 scored) gave 5/5 precision and 5/9 recall; the table is in the README. It is too small to conclude from and excludes mail dropped by the first filter.
 - **One mailbox, one job seeker, one season.** Sender mix and phrasing are specific to this sample.
 - **Labels are not independently verified** (see above).
 - **One email has no recorded model output.** It was dropped by the prefilter in the recorded run, so in the replay it is parsed by rules alone and lands in "needs confirmation".

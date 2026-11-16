@@ -67,9 +67,22 @@ Measured on 147 of my own recruiting emails (92 process emails, 50 job ads, 5 un
 | Ads / unrelated email sent to "needs confirmation" (of 55) | 14 | 13 | 11 | **2** |
 | Company name correct (of 92) | 59.8% | 98.9% | 98.9% | 98.9% |
 
-**Read this honestly:** the last two columns are measured on the *same* 147 emails the fixes were written against, so they are optimistic. A fresh, unseen batch has not been scored yet. The first-run column is the uncontaminated number. The promotional filter also has a cost: 2 process emails that used to wait in "needs confirmation" are now folded away as promotional (see [docs/EVALUATION.md](./docs/EVALUATION.md)).
+**Read this honestly:** the last two columns are measured on the *same* 147 emails the fixes were written against, so they are optimistic. The first-run column is the uncontaminated number. The promotional filter also has a cost: 2 process emails that used to wait in "needs confirmation" are now folded away as promotional (see [docs/EVALUATION.md](./docs/EVALUATION.md)).
 
 The first run is the interesting part: adding the model fixed company names almost completely (60% → 99%) but barely moved precision, because items that had been held back for "no company name" were now released onto the schedule *along with their other errors*. That is what led to the "veto, no vote" rule above.
+
+### Unseen email (2026-11-10, first pass)
+
+Scored against what the hosted product actually stored: 76 emails my own account received between 16 October and 10 November, labelled blind before comparing.
+
+| | Received after the rules were frozen (truly unseen, 15) | All 76 |
+|---|---|---|
+| Items on the schedule that are fully correct | 5 / 5 | 18 / 18 |
+| Process emails on the schedule, fully correct | 5 / 9 (55.6%) | 18 / 30 (60.0%) |
+| Ads / unrelated email wrongly on the schedule | 0 / 6 | 0 / 46 |
+| Exact time correct | 5 / 5 | 15 / 15 |
+
+**Discount these numbers:** only 15 emails are truly unseen, far too few to conclude anything; mail dropped by the first filter was never stored and is not in the sample; it is still one mailbox and one person. What it shows is direction: no wrong time was displayed, but recall is below the in-sample 72.8%, and everything that missed the schedule was held in "needs confirmation". The three event-type errors this exposed have been fixed in the hosted product (see "Repository vs. hosted product" below).
 
 ## What the demo shows
 
@@ -105,6 +118,19 @@ The demo is the front end only. `worker/` is the server side behind https://boar
 <img src="docs/images/reminder-email.png" alt="An email reminder: the interview time where you are and where it happens, the meeting link, exam code and your notes" width="520">
 
 Deploy steps and the security notes are in [worker/README.md](./worker/README.md) (Chinese). Before deploying, replace the placeholders in `worker/wrangler.toml` (domain, e-mail, database id) with your own.
+
+## Repository vs. hosted product
+
+The code here is a **snapshot from 20 October 2026**, exported by hand and not synced automatically. The hosted product has moved on; the following is live but not in this repository yet, and will come with the next export:
+
+- **Better event types**: a rejection that contains the word "interview" is no longer an interview; an email that *mentions* a step is not that step (a receipt saying "you will be invited to an assessment later"); post-interview feedback requests are folded; an exam pre-notice is no longer treated as a reschedule.
+- **More conservative times**: date-only events no longer show a made-up clock time, and the day a link was sent is no longer taken as the exam time.
+- **Cards**: links are ordered by purpose (exam entry first, confirm attendance second, practice and instructions under "other links"); the schedule is sorted by time, with small-hours slots flagged alongside the original time; one click moves an item from "needs confirmation" to the schedule.
+- **Multiple devices**: saves are version-checked, so two open boards no longer overwrite each other.
+- **Calendar feed links** are now randomly generated.
+- **Tests**: a real-browser smoke test covering sign-in, confirm, mark done and reload.
+
+The test counts under "Repository layout" and "Run it" therefore describe the code in this repository, not the hosted version.
 
 ## Repository layout
 
@@ -151,12 +177,14 @@ To score the engine on your own mailbox, see `engine/tools/eval-extract.ts` and 
 
 ## Known limitations
 
-- **Not validated on unseen email yet.** See the note under the results table.
+- **Unseen-email validation is thin.** One pass, 15 truly unseen emails, 55.6% recall (see above). More are being collected.
+- **This repository lags the hosted product.** See "Repository vs. hosted product".
 - **The demo has no backend.** Manual edits there live in the browser's local storage. The server side lives in `worker/` (see above).
 - **Beta.** Seats are capped and the sending quota is shared between sign-in codes and reminders. "Forward everything" has been verified end to end for QQ Mail; NetEase 163 and Outlook follow the same pattern but have not been walked through yet.
 - **Promotional filtering is rule-based and in-sample.** Campus talks, live streams, job-board recommendations and "applications are open" mail are recognised from the subject line and folded; new marketing phrasings will slip through until a rule is added. The "mark as ad" button blocks a sender as a fallback.
-- **"Conditional future" mentions.** A receipt that says "you will be invited to an assessment within 24 hours" is still classified as an assessment by the rules. It is now caught by the model's veto and held for confirmation, but the rule itself is not fixed.
+- **"Conditional future" mentions.** A receipt that says "you will be invited to an assessment within 24 hours" is still classified as an assessment by the rules. In this snapshot it is caught by the model's veto and held for confirmation; the rule itself has since been fixed in the hosted product.
 - **Emails with no time-zone evidence** are held for confirmation by design, even when a human could guess the zone from the company.
+- **One company under two names** (an English brand in one email, the full Chinese legal name in another) shows up as two items; the system does not yet recognise them as the same company.
 - Source comments are in Chinese and occasionally reference internal design notes that are not part of this repository.
 
 ## What is not in this repository
