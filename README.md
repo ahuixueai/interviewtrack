@@ -1,174 +1,112 @@
 # 准点 · InterviewTrack
 
-**Turns recruiting emails into a schedule you can trust, in your own time zone.** Built for students abroad applying to jobs back home: a Beijing 13:30 interview shows up as 01:30 where you are, the night before you get an email with the meeting link, and your calendar rings 30 minutes before. It reads application receipts, assessment invites, interview notices and rejections, works out *what* each one is and *when* it happens (in which time zone), and puts it on a board. When it is not sure, it says so instead of guessing.
+**把招聘邮件变成一张可以放心照着做的日程，按你所在的时区。** 给在海外找国内工作的留学生做的：北京时间 13:30 的面试，在你这里显示成凌晨 01:30；前一天晚上收到一封带会议链接的提醒邮件，开始前 30 分钟日历响一下。它读投递回执、测评邀请、面试通知和拒信，判断每一封「是什么事」「什么时候」「哪个时区」，排进看板。拿不准的时候，它会直说，而不是猜一个。
 
-**Try it:** https://board.interviewtrack.me (public beta, limited seats; sign in with an email code)
-**Live demo:** https://job-command-center-eta-two.vercel.app (all companies and emails fictional; everything runs in the browser)
+**直接用：** https://board.interviewtrack.me （公开内测，名额有限；邮箱验证码登录）
+**在线演示：** https://job-command-center-eta-two.vercel.app （公司和邮件全部虚构，解析都在浏览器里完成）
 
-![The board: schedule in your time zone, the original email with the time highlighted, calendar, stats](docs/images/demo.gif)
+![看板：按你时区的日程、高亮了时间的原邮件、日历、统计](docs/images/demo.gif)
 
-[中文说明](./README.zh-CN.md)
+[English](./README.en.md)
 
----
+## 为什么做这个
 
-## Why this exists
+秋招期间每周几十封邮件，中英文混着，跨四个时区。代价最高的错误很具体：
 
-During campus recruiting I was getting dozens of emails a week across two languages and four time zones. The costly mistakes are specific:
+- 把**固定场次**当成截止时间 → 错过考试
+- 把**截止时间**当成固定场次 → 白等一场不存在的考试
+- 时间显示成**错的时区** → 差 12 个小时
+- 把「邀请于 09:09 生效」当成考试时间 → 邮件一到，看板就显示「已逾期」
 
-- A **fixed exam slot** read as a deadline → you miss the exam.
-- A **deadline** read as a fixed slot → you sit waiting for something that never starts.
-- A time shown in the **wrong time zone** → you are 12 hours off.
-- An invite's *"this link becomes valid at 09:09"* read as the event time → the board says "overdue" the moment the email arrives.
+直接让大模型「把时间抽出来」，这四种错它都会犯，而且很自信。所以目标不是「抽得越多越好」，而是**绝不显示一个错的时间**。
 
-A general-purpose LLM asked to "extract the date" makes all four, confidently. So the design goal is not "extract as much as possible". It is **never show a wrong time**.
+## 核心设计：模型只摘抄，规则做决定
 
-## The core idea: the model extracts, rules decide
+模型只允许从原文里**逐字摘出片段**：公司名、岗位、说时间的那句话、地点、对事件类型的建议。它不输出日期，不输出时区，不做任何决定。
 
-```mermaid
-flowchart LR
-    A[Raw email] --> B[Clean<br/>strip quotes, decode entities]
-    B --> C{Prefilter<br/>rules}
-    C -- noise --> X[Dropped<br/>with a reason]
-    C -- pass --> D[LLM extraction<br/>verbatim fragments only]
-    D --> E[Grounding check<br/>fragment must appear in the email]
-    E --> F[Rules<br/>event type · time zone · time semantics]
-    F --> G[Confidence<br/>weakest signal wins]
-    G -- high / medium --> H[Schedule + calendar]
-    G -- low --> I[Needs your confirmation]
-```
+会伤到用户的判断全部交给确定性规则：是场次还是截止、哪个时区、是不是同一件事、够不够把握排进日程。规则可以逐条读、逐条测、逐条改。
 
-The LLM is only allowed to **copy fragments out of the email**: the company name, the role, the sentence that talks about time, a location, and a suggested event type. It never outputs a date, a time zone or a decision.
+由此得到两条性质：
 
-Everything that can hurt the user is decided by deterministic rules that can be read, tested and corrected one at a time:
+1. **模型只有否决权，没有提名权。** 模型和规则对「这是什么事」看法不同时，这件事进「待确认」。模型能把一件事拦在日程外面，但不能把任何一件事送进日程。
+2. **每个结论都能解释。** 每张卡片的详情里有高亮的原文片段，以及每一步判断的依据。
 
-| Decision | Made by | Why |
-|---|---|---|
-| Company / role / "which sentence is about time" | LLM | Rules are bad at free-form names; models are good at it |
-| Is this fragment really in the email? | Rule (grounding check) | Blocks hallucinated dates and places |
-| Fixed start vs. deadline vs. date-only | Rules | The most expensive mistake; must be explainable |
-| Time zone | Rules, from explicit evidence only | Never inferred from language, never defaulted |
-| Same event as an earlier email? | Rules (dedup key) | Reminders merge into the original instead of duplicating |
-| Does it go on the schedule? | Rules (confidence) | "Uncertain" is a first-class outcome, not a failure |
+## 真实邮件上的结果
 
-Two properties follow from this split:
+在我自己的 147 封招聘邮件上测得（流程邮件 92 封、岗位广告 50 封、无关 5 封）。方法和注意事项见 [docs/EVALUATION.md](./docs/EVALUATION.md)。
 
-1. **The model has a veto but no vote.** If the model and the rules disagree about what an email is, the item goes to "needs confirmation". The model can keep something *off* the schedule; it can never put something *on* it.
-2. **Every result is explainable.** Each card has a detail view showing the highlighted source fragments and the reason behind every step.
-
-## Results on real email
-
-Measured on 147 of my own recruiting emails (92 process emails, 50 job ads, 5 unrelated). Full method and caveats: [docs/EVALUATION.md](./docs/EVALUATION.md).
-
-| | Rules only | Rules + model, first run | Rules + model, after fixes | + promotional filter |
+| | 只用规则 | 规则+模型（首次） | 规则+模型（修复后） | + 群发过滤 |
 |---|---|---|---|---|
-| **Precision** — items on the schedule that are fully correct (target > 95%) | 73.8% | 75.0% | 98.5% | **100%** (67 / 67) |
-| **Recall** — process emails that land on the schedule fully correct (target > 70%) | 33.7% | 55.4% | 72.8% | **72.8%** |
-| Ads / unrelated email wrongly put on the schedule (of 55) | 3 | 8 | 1 | **0** |
-| Ads / unrelated email sent to "needs confirmation" (of 55) | 14 | 13 | 11 | **2** |
-| Company name correct (of 92) | 59.8% | 98.9% | 98.9% | 98.9% |
+| **精确率**：进日程的条目完全正确的比例（目标 > 95%） | 73.8% | 75.0% | 98.5% | **100%**（67 / 67） |
+| **召回率**：流程邮件完全正确且进了日程的比例（目标 > 70%） | 33.7% | 55.4% | 72.8% | **72.8%** |
+| 广告/无关邮件错上日程（共 55 封） | 3 | 8 | 1 | **0** |
+| 广告/无关邮件进了「待确认」（共 55 封） | 14 | 13 | 11 | **2** |
+| 公司名正确（共 92 封） | 59.8% | 98.9% | 98.9% | 98.9% |
 
-**Read this honestly:** the last two columns are measured on the *same* 147 emails the fixes were written against, so they are optimistic. A fresh, unseen batch has not been scored yet. The first-run column is the uncontaminated number. The promotional filter also has a cost: 2 process emails that used to wait in "needs confirmation" are now folded away as promotional (see [docs/EVALUATION.md](./docs/EVALUATION.md)).
+**需要说明：**后两列是在同一批 147 封邮件上测的，而修复正是对着这批邮件做的，所以偏乐观。还没有在一批没见过的新邮件上验证过。「首次」一列才是没有被污染的数字。群发过滤也有代价：有 2 封原本停在「待确认」的流程邮件，现在被当成群发折叠了（见 [docs/EVALUATION.md](./docs/EVALUATION.md)）。
 
-The first run is the interesting part: adding the model fixed company names almost completely (60% → 99%) but barely moved precision, because items that had been held back for "no company name" were now released onto the schedule *along with their other errors*. That is what led to the "veto, no vote" rule above.
+## 演示里能看到什么
 
-## What the demo shows
+今天（下一件事倒计时、48 小时内要做的、该跟进的）· 日程（标完成；时间过了没标的会问你「做了吗」，不自动算完成）· 日历 · 待确认（每条写明为什么拿不准，可批量处理）· 投递（状态由邮件推断，回执和结果只记在这里；可编辑、批量跟进，手机上是卡片）· 统计 · 邮件（最新在前；广告、验证码折叠在下面并写明原因；删除的进回收站可恢复）· 设置（看板替你记住了什么，每条都能删）。
 
-| View | What it is |
-|---|---|
-| Today | The next thing to do with a countdown, what is due in 48 hours, and what needs a follow-up. |
-| Schedule | One card per event: company, role, time in *your* time zone, the assessment link / meeting ID on the card. Mark done; past items you have not marked are asked about ("did you do it?") instead of being assumed done. |
-| Calendar | The same items on a month grid, placed by the viewer's local date. |
-| Needs confirmation | Items the system would not guess on, each with a plain-language reason: schedule it, record it only, ignore it, or mark the sender as an ad. Bulk select. |
-| Applications | One row per company; status inferred from the emails (receipts and results count here and nowhere else), editable. Bulk "followed up, check again in 7 days". Cards instead of a table on phones. |
-| Stats | Funnel, status breakdown, the next two weeks, weekly volume, and how much the system handled without help. |
-| Emails | Every email, newest first: relevant ones on top, ignored ones (ads, codes) folded below with the reason, deleted ones in a restorable trash. |
-| Settings | What the board has learned from you (blocked senders, renamed companies, confirmed time zones), each removable; clear all changes. |
+所有视图通用：任何一条都能编辑（原邮件不会被改）、撤销上一步（按钮或 Ctrl/Cmd+Z）、搜索、撤不回来的操作要点两下。
 
-Across all views: edit any item (the original email is never changed), undo the last step (button or Ctrl/Cmd+Z), search, and confirm twice before anything irreversible.
+## 线上产品（`worker/`）
 
-The demo ships 28 synthetic emails. Thirteen are each built to exercise one specific failure mode (a fixed exam slot, a relative "within 72 hours" deadline, an "effective at" trap, an English email for an event in Hong Kong, an invite with no time zone, a reminder that must merge, and so on); the other fifteen are three weeks of ordinary history (receipts, a second-round and a final interview, an offer, rejections) so the applications table and the stats have something to show. Model output for these samples was recorded once and is replayed in the browser, so the public site makes no API calls.
+演示站只有前端。`worker/` 是 https://board.interviewtrack.me 背后的服务端，跑在 Cloudflare 上（Workers + D1 + Email Routing + Email Service），用的是同一个引擎、同一套看板组件。
 
-## The hosted product (`worker/`)
+- **登录**：邮箱验证码（6 位、10 分钟有效、最多试 5 次；按邮箱和来源限频；没注册的邮箱也回答「已发送」，外人试不出谁有账号），前面有 Cloudflare Turnstile 防机器人。
+- **AI（可关）**：一句话添加；面试准备（这场面试的邮件 + 你的简历，简历在浏览器里转成文字）。每人每天有额度，关掉后只用规则。
 
-The demo is the front end only. `worker/` is the server side behind https://board.interviewtrack.me, on Cloudflare (Workers + D1 + Email Routing + Email Service), using the same engine and the same board component:
+已经是多人版（board.interviewtrack.me）：
+- **账号**：邮箱验证码登录，开放注册（有名额上限）；每个人的数据分开存，别人看不到。
+- **收信**：每人一个专属收信地址。Gmail 用一段过滤条件只转招聘信；QQ、163、Outlook 全部转发，准点按标题、正文、发件系统挑出招聘信，其余当场丢掉，不保存、不交给 AI。转发确认（Gmail 验证码、QQ「接受转发」）直接变成看板上的按钮；手动转发（包括 QQ 一次转多封）会还原成原信。
+- **时区**：选「你在哪」和「在哪找工作」，时间按你这里显示，原来的时间在详情里。
+- **邮件提醒**：面试、笔试前一天晚上一封（两地时间、链接、考试码、你的备注）；测评截止前 24 小时、3 小时各一封，标了完成就不发。
+- **日历订阅**：默认开始前 30 分钟提醒，链接泄露可以换。
+- **隐私**：大白话隐私政策、一键删除账号、登录记录 2 天后删除、每 6 小时自检。
 
-| Feature | How |
-|---|---|
-| Accounts | Sign in with an email one-time code (6 digits, 10 minutes, 5 attempts; per-email and per-IP rate limits; unknown addresses get the same answer so accounts cannot be enumerated), behind Cloudflare Turnstile. Open registration up to a seat cap. Every table is keyed by user; nobody sees anyone else's mail. |
-| Real email in | Each user gets a private inbox address. Gmail forwards only recruiting mail with a one-paste filter; QQ Mail, NetEase 163 and Outlook forward everything, and the Worker keeps only what looks like recruiting mail (subject, body or a known applicant-tracking sender). The rest is dropped on arrival: not stored, never sent to the model. Forwarding confirmations (Gmail codes, QQ "accept" links) appear on the board as one-click buttons. Manual forwards (including QQ's multi-message forward) are unwrapped to the original sender and time. |
-| Your time zone | You pick where you are and where you are job-hunting; times are shown in your zone with the original zone in the details. |
-| Email reminders | The evening before an interview or exam, an email with the time (yours and theirs), the link, any exam code and your notes; 24 h and 3 h before an assessment deadline unless you marked it done. |
-| Calendar subscription | A per-user `.ics` feed for Apple or Google Calendar, rings 30 minutes before by default. The link can be rotated if it leaks. |
-| AI, optional | Quick add from one sentence; interview prep from the item's emails and your résumé (converted to text in the browser). Per-user daily quota; can be switched off, in which case only rules run. |
-| Privacy | Plain-language privacy policy, delete-my-account, security headers, sign-in logs purged after 2 days, a 6-hourly health check. |
+<img src="docs/images/reminder-email.png" alt="提醒邮件：你这里和当地的面试时间、会议链接、考试码、你的备注" width="520">
 
-<img src="docs/images/reminder-email.png" alt="An email reminder: the interview time where you are and where it happens, the meeting link, exam code and your notes" width="520">
+部署步骤和安全说明见 [worker/README.md](./worker/README.md)。部署前先把 `worker/wrangler.toml` 里的占位符（域名、邮箱、数据库 id）换成你自己的。
 
-Deploy steps and the security notes are in [worker/README.md](./worker/README.md) (Chinese). Before deploying, replace the placeholders in `worker/wrangler.toml` (domain, e-mail, database id) with your own.
-
-## Repository layout
+## 目录
 
 ```
-engine/   Parsing engine. Pure TypeScript, zero runtime dependencies. 509 tests.
-web/      Next.js app (the demo). The engine is vendored into web/lib/tracker-core. 166 tests.
-worker/   Cloudflare Worker: email intake, accounts, reminders, calendar feed, AI endpoints, and the board (Vite). 138 tests.
-docs/     Evaluation method and numbers.
+engine/   解析引擎。纯 TypeScript，零运行时依赖，509 个测试
+web/      Next.js 应用（即演示站）。引擎以拷贝方式放在 web/lib/tracker-core，166 个测试
+worker/   Cloudflare Worker：收信、账号、提醒、日历订阅、AI 接口，以及看板页面（Vite），138 个测试
+docs/     评测方法与数字
 ```
 
-## Run it
+## 运行
 
-Requires Node.js 20.9 or later; the worker tests need 22.13 or later (they use node:sqlite).
+需要 Node.js 20.9 或更高版本；worker 的测试要 22.13 以上（用到 node:sqlite）。
 
 ```bash
-# engine
-cd engine
-npm ci
-npm test                 # 509 tests
-npm run check            # type-check + tests with per-file coverage threshold
-
-# web
-cd web
-npm ci
-npm run dev              # http://localhost:3000
-npm test                 # 166 tests
-npm run check            # types + lint + tests + production build
-
-# worker (install web first: the board reuses its components)
-cd worker
-npm ci
-npm run check            # types + 138 tests + board build (needs Node 22.13+ for node:sqlite in tests)
+cd engine && npm ci && npm test
+cd web && npm ci && npm run dev      # http://localhost:3000
+cd worker && npm ci && npm run check # 先装好 web（看板复用它的组件）；类型检查 + 测试 + 构建看板（测试要 Node 22.13+）
 ```
 
-To use a real model instead of the recorded output, any OpenAI-compatible chat endpoint works:
+## 已知局限
 
-```bash
-cd web
-export LLM_BASE_URL=https://api.deepseek.com/v1 LLM_MODEL=deepseek-v4-pro LLM_API_KEY=...
-npx vite-node scripts/record-extractions.ts
-```
+- 尚未在没见过的新邮件上验证。
+- 演示站没有后端：那里的手动操作存在浏览器本地。服务端在 `worker/`（见上）。
+- 内测阶段：名额有上限，验证码和提醒共用发信额度。「全部转发」在 QQ 邮箱上完整走通过；163、Outlook 同理但还没实际走一遍。
+- 群发过滤靠标题规则，是对着这批邮件调的；新出现的营销说法会漏，「这是广告」按钮屏蔽发件人兜底。
+- 没有任何时区线索的邮件按设计进「待确认」，即使人能从公司猜出时区。
 
-To score the engine on your own mailbox, see `engine/tools/eval-extract.ts` and `engine/tools/score-extract.ts`. Keep your emails and their outputs out of version control.
+## 不在这个仓库里的东西
 
-## Known limitations
+真实邮件、人工真值、以及回放真实邮件的回归测试都留在私有环境。这个仓库只有代码、合成数据和汇总后的评测数字。
 
-- **Not validated on unseen email yet.** See the note under the results table.
-- **The demo has no backend.** Manual edits there live in the browser's local storage. The server side lives in `worker/` (see above).
-- **Beta.** Seats are capped and the sending quota is shared between sign-in codes and reminders. "Forward everything" has been verified end to end for QQ Mail; NetEase 163 and Outlook follow the same pattern but have not been walked through yet.
-- **Promotional filtering is rule-based and in-sample.** Campus talks, live streams, job-board recommendations and "applications are open" mail are recognised from the subject line and folded; new marketing phrasings will slip through until a rule is added. The "mark as ad" button blocks a sender as a fallback.
-- **"Conditional future" mentions.** A receipt that says "you will be invited to an assessment within 24 hours" is still classified as an assessment by the rules. It is now caught by the model's veto and held for confirmation, but the rule itself is not fixed.
-- **Emails with no time-zone evidence** are held for confirmation by design, even when a human could guess the zone from the company.
-- Source comments are in Chinese and occasionally reference internal design notes that are not part of this repository.
+我自己部署用的配置（域名、邮箱、数据库 id、密钥）在 `worker/wrangler.toml` 里都换成了占位符。密钥从不进仓库，用 `wrangler secret put` 单独设置。
 
-## What is not in this repository
+## 这个项目是怎么做出来的
 
-Real emails, the hand-labelled truth set, and the regression tests that replay real emails are kept private. This repository contains code, synthetic data, and aggregate evaluation numbers only.
+一个人和 AI 编程助手（Claude）协作完成。产品决策、引擎不可违反的几条铁律、以及每次改动的验收由我负责；大部分代码和真值的初标是和助手一起完成的。这对评测数字意味着什么，见 [docs/EVALUATION.md](./docs/EVALUATION.md)。
 
-My own deployment's configuration (domain, e-mail addresses, database id, keys) is replaced with placeholders in `worker/wrangler.toml`. Secrets are never in the repository; they are set with `wrangler secret put`.
+## 许可
 
-## How it was built
-
-Built by one person working with an AI coding assistant (Claude). The product decisions, the invariants the engine must never break, and the acceptance of each change were mine; much of the code and the first-pass truth labelling were produced with the assistant. See [docs/EVALUATION.md](./docs/EVALUATION.md) for what that means for the numbers.
-
-## License
-
-MIT — see [LICENSE](./LICENSE).
+MIT，见 [LICENSE](./LICENSE)。
