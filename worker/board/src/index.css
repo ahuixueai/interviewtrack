@@ -5,3 +5,41 @@
 @source "../../../web/components/demo";
 @source "../../../web/lib/demo";
 @source "./";
+
+/* 登录页左边的动画（LoginShowcase.tsx），15 秒一轮：
+ * 收件箱 5 封信一直在；每隔 2.4 秒一封亮起、飞进「准」字，右边出一张日程卡并留着，攒满 5 张后一起淡出，下一轮重来。 */
+@keyframes zd-ghost1 { 0%, 6.67% { opacity: 0; transform: translate(0, 0) scale(1); } 7.33% { opacity: 1; transform: translate(0, 0) scale(1); } 14.67%, 100% { opacity: 0; transform: translate(206px, 140px) scale(0.25); } }
+@keyframes zd-mail1 { 0%, 6.33% { opacity: 1; border-color: var(--jcc-hairline); } 6.67%, 14.67% { opacity: 1; border-color: var(--jcc-accent); } 16.00%, 93.33% { opacity: 0.5; border-color: var(--jcc-hairline); } 97.33%, 100% { opacity: 1; border-color: var(--jcc-hairline); } }
+@keyframes zd-card1 { 0%, 14.67% { opacity: 0; transform: translateX(-14px); } 17.33%, 93.33% { opacity: 1; transform: translateX(0); } 97.33%, 100% { opacity: 0; transform: translateX(0); } }
+@keyframes zd-ghost2 { 0%, 22.67% { opacity: 0; transform: translate(0, 0) scale(1); } 23.33% { opacity: 1; transform: translate(0, 0) scale(1); } 30.67%, 100% { opacity: 0; transform: translate(206px, 70px) scale(0.25); } }
+@keyframes zd-mail2 { 0%, 22.33% { opacity: 1; border-color: var(--jcc-hairline); } 22.67%, 30.67% { opacity: 1; border-color: var(--jcc-accent); } 32.00%, 93.33% { opacity: 0.5; border-color: var(--jcc-hairline); } 97.33%, 100% { opacity: 1; border-color: var(--jcc-hairline); } }
+@keyframes zd-card2 { 0%, 30.67% { opacity: 0; transform: translateX(-14px); } 33.33%, 93.33% { opacity: 1; transform: translateX(0); } 97.33%, 100% { opacity: 0; transform: translateX(0); } }
+@keyframes zd-ghost3 { 0%, 38.67% { opacity: 0; transform: translate(0, 0) scale(1); } 39.33% { opacity: 1; transform: translate(0, 0) scale(1); } 46.67%, 100% { opacity: 0; transform: translate(206px, 0px) scale(0.25); } }
+@keyframes zd-mail3 { 0%, 38.33% { opacity: 1; border-color: var(--jcc-hairline); } 38.67%, 46.67% { opacity: 1; border-color: var(--jcc-accent); } 48.00%, 93.33% { opacity: 0.5; border-color: var(--jcc-hairline); } 97.33%, 100% { opacity: 1; border-color: var(--jcc-hairline); } }
+@keyframes zd-card3 { 0%, 46.67% { opacity: 0; transform: translateX(-14px); } 49.33%, 93.33% { opacity: 1; transform: translateX(0); } 97.33%, 100% { opacity: 0; transform: translateX(0); } }
+@keyframes zd-ghost4 { 0%, 54.67% { opacity: 0; transform: translate(0, 0) scale(1); } 55.33% { opacity: 1; transform: translate(0, 0) scale(1); } 62.67%, 100% { opacity: 0; transform: translate(206px, -70px) scale(0.25); } }
+@keyframes zd-mail4 { 0%, 54.33% { opacity: 1; border-color: var(--jcc-hairline); } 54.67%, 62.67% { opacity: 1; border-color: var(--jcc-accent); } 64.00%, 93.33% { opacity: 0.5; border-color: var(--jcc-hairline); } 97.33%, 100% { opacity: 1; border-color: var(--jcc-hairline); } }
+@keyframes zd-card4 { 0%, 62.67% { opacity: 0; transform: translateX(-14px); } 65.33%, 93.33% { opacity: 1; transform: translateX(0); } 97.33%, 100% { opacity: 0; transform: translateX(0); } }
+@keyframes zd-ghost5 { 0%, 70.67% { opacity: 0; transform: translate(0, 0) scale(1); } 71.33% { opacity: 1; transform: translate(0, 0) scale(1); } 78.67%, 100% { opacity: 0; transform: translate(206px, -140px) scale(0.25); } }
+@keyframes zd-mail5 { 0%, 70.33% { opacity: 1; border-color: var(--jcc-hairline); } 70.67%, 78.67% { opacity: 1; border-color: var(--jcc-accent); } 80.00%, 93.33% { opacity: 0.5; border-color: var(--jcc-hairline); } 97.33%, 100% { opacity: 1; border-color: var(--jcc-hairline); } }
+@keyframes zd-card5 { 0%, 78.67% { opacity: 0; transform: translateX(-14px); } 81.33%, 93.33% { opacity: 1; transform: translateX(0); } 97.33%, 100% { opacity: 0; transform: translateX(0); } }
+.zd-a { animation-duration: 15s; animation-iteration-count: infinite; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); animation-fill-mode: both; }
+.zd-ghost1 { animation-name: zd-ghost1; } .zd-mail1 { animation-name: zd-mail1; } .zd-card1 { animation-name: zd-card1; }
+.zd-ghost2 { animation-name: zd-ghost2; } .zd-mail2 { animation-name: zd-mail2; } .zd-card2 { animation-name: zd-card2; }
+.zd-ghost3 { animation-name: zd-ghost3; } .zd-mail3 { animation-name: zd-mail3; } .zd-card3 { animation-name: zd-card3; }
+.zd-ghost4 { animation-name: zd-ghost4; } .zd-mail4 { animation-name: zd-mail4; } .zd-card4 { animation-name: zd-card4; }
+.zd-ghost5 { animation-name: zd-ghost5; } .zd-mail5 { animation-name: zd-mail5; } .zd-card5 { animation-name: zd-card5; }
+@keyframes zd-pulse { 0% { opacity: 0.55; transform: scale(1); } 100% { opacity: 0; transform: scale(1.9); } }
+@keyframes zd-dash { to { stroke-dashoffset: -24; } }
+.zd-ring { animation: zd-pulse 2.4s ease-out infinite; }
+.zd-flow { animation: zd-dash 1.2s linear infinite; }
+/* 大屏放大一点，把页面占满 */
+@media (min-width: 1536px) { .zd-zoom { zoom: 1.15; } }
+@media (min-width: 1800px) { .zd-zoom { zoom: 1.3; } }
+@media (min-width: 2200px) { .zd-zoom { zoom: 1.5; } }
+/* 开了「减少动态效果」：信都在收件箱，日程卡直接摆好，不飞 */
+@media (prefers-reduced-motion: reduce) {
+  .zd-a, .zd-ring, .zd-flow { animation: none !important; }
+  .zd-a { opacity: 1; transform: none; }
+  .zd-ghost, .zd-ring { opacity: 0 !important; }
+}

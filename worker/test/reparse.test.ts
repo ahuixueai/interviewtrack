@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { handleIncoming } from "../src/inbox.js";
 import type { IncomingMail } from "../src/inbox.js";
-import { BATCH, reparseBatch, RETRY_BATCH, retryModelBatch } from "../src/reparse.js";
-import { ME, owner, ownerSetting, setup } from "./helpers.js";
+import { BATCH, reparseAllBatch, reparseBatch, RETRY_BATCH, retryModelBatch } from "../src/reparse.js";
+import { member, ME, owner, ownerSetting, setup } from "./helpers.js";
 const NOW = Date.parse("2026-10-13T04:00:00Z");
 
 function mail(i: number, subject: string): IncomingMail {
@@ -50,6 +50,29 @@ describe("按新规则重判已存的邮件", () => {
     }
     expect(called).toBe(false);
     expect(JSON.parse(String(emails()[0]!.outcome)).event.eventType).toBe("assessment");
+  });
+});
+
+describe("作者一键重判所有人的信", () => {
+  it("别人的信也按新规则重判，写回的还是那个人的", async () => {
+    const { e: env, emails, exec } = setup();
+    await handleIncoming(mail(1, "星河科技笔试通知"), env, NOW, () => "id-001");
+    const amy = await member(env, "amy@school.example");
+    // 复制一封给 amy，两封都假装被旧规则判错
+    const row = emails()[0]!;
+    const broken = JSON.parse(String(row.outcome));
+    broken.event.eventType = "interview";
+    exec("UPDATE emails SET outcome = ? WHERE id = 'id-001'", JSON.stringify(broken));
+    exec(
+      "INSERT INTO emails (id, user_id, from_addr, subject, body, received_at, stored_at, status, outcome, via) SELECT 'id-002', ?, from_addr, subject, body, received_at, stored_at, status, outcome, via FROM emails WHERE id = 'id-001'",
+      amy.id,
+    );
+
+    const r = await reparseAllBatch(env, null);
+    expect(r).toEqual({ next: null, checked: 2, changed: 2 });
+    expect(emails(amy.id)).toHaveLength(1);
+    expect(JSON.parse(String(emails(amy.id)[0]!.outcome)).event.eventType).toBe("assessment");
+    expect(JSON.parse(String(emails((await owner(env)).id)[0]!.outcome)).event.eventType).toBe("assessment");
   });
 });
 

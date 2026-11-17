@@ -264,7 +264,8 @@ export function isAtsDomain(senderDomain: string): boolean {
 const NOT_A_COMPANY_DOMAIN = /(?:^|\.)(?:gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|qq|foxmail|163|126|yeah|sina|sohu|139|aliyun|proton|protonmail|wisdomore|zhaopin|51job|lietou-edm|liepin|nowcoder|shixiseng|yingjiesheng|linkedin|indeed|glassdoor|zhipin)\.[a-z.]+$/;
 
 /** 域名里不说明是哪家的那几段：顶级域、二级公共后缀。 */
-const PUBLIC_SUFFIX_LABELS: ReadonlySet<string> = new Set(["com", "cn", "net", "org", "edu", "gov", "co", "io", "hk", "sg", "uk", "jp", "us", "tw", "mo", "de", "fr", "ai"]);
+// jobs、careers、work：招聘专用的顶级域（mail.amazon.jobs），去掉它才轮到真正的公司名
+const PUBLIC_SUFFIX_LABELS: ReadonlySet<string> = new Set(["com", "cn", "net", "org", "edu", "gov", "co", "io", "hk", "sg", "uk", "jp", "us", "tw", "mo", "de", "fr", "ai", "jobs", "careers", "work"]);
 
 function canonicalFromDomain(senderDomain: string): string | null {
   const domain = extractDomain(senderDomain);

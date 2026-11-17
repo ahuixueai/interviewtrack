@@ -115,13 +115,34 @@ export function validateExtraction(value: unknown, sourceText: string): Extracti
  * 公司名的几个高频标题模式。实测样本里绝大多数 ATS 通知的标题都长这样。
  * 只匹配结构清晰的，匹配不上就返回 null——桩宁可少给，也不给一个错公司名。
  */
-const SUBJECT_COMPANY: readonly RegExp[] = [
-  /^来自(.{2,30}?)的(?:.{0,10})?(?:邀请|通知|反馈|回复|更新)/,
-  /^【(.{2,30}?)】/,
-  /^\[(.{2,30}?)\]/,
-  /^(.{2,20}?)(?:校园招聘|校招|秋季招聘|春季招聘)/,
-  /^(.{2,20}?)(?:测评|笔试|面试|录用)(?:邀请|通知)/,
+const SUBJECT_COMPANY: readonly { pattern: RegExp; prefix: boolean }[] = [
+  { pattern: /^来自(.{2,30}?)的(?:.{0,10})?(?:邀请|通知|反馈|回复|更新)/, prefix: false },
+  { pattern: /^【(.{2,30}?)】/, prefix: false },
+  { pattern: /^\[(.{2,30}?)\]/, prefix: false },
+  // 下面两条取的是「关键词前面的全部」，常把岗位和面试形式一起带进来，要再修一刀（见 trimPrefix）
+  { pattern: /^(.{2,20}?)(?:校园招聘|校招|秋季招聘|春季招聘)/, prefix: true },
+  { pattern: /^(.{2,20}?)(?:测评|笔试|面试|录用)(?:邀请|通知)/, prefix: true },
 ];
+
+/** 只会是岗位、不会是公司名结尾的词。「咨询」「科技」「数据」这类公司名里常见的不放进来。 */
+const ROLE_WORD = /岗位|职位|产品经理|项目经理|工程师|分析师|专员|助理|实习生|管培生|管理培训生|设计师|研究员|开发/;
+/** 标题里紧挨着「面试」的形式词：「视频面试邀请」。 */
+const FORMAT_TAIL = /(?:视频|电话|线上|线下|在线|现场|群|AI|ai)+$/;
+
+/**
+ * 「远山动力 产品经理岗位视频面试邀请」→ 关键词前面是「远山动力 产品经理岗位视频」。
+ * 先在空格、横线这类分隔符处切开取前一段，再去掉末尾的形式词，最后在第一个岗位词前切断。
+ * 切完不到 2 个字就当没取到。
+ */
+function trimPrefix(value: string): string {
+  // 中文公司名里不会有空格，英文的会有（「Sierra Robotics」）：只有前一段是中文时才在空格处切
+  const head = value.split(/[\s\-–—·|｜/_：:，,]+/)[0] ?? value;
+  let out = /[\u4e00-\u9fff]/.test(head) ? head : (value.split(/[\-–—·|｜/_：:，,]+/)[0] ?? value);
+  out = out.replace(FORMAT_TAIL, "");
+  const role = ROLE_WORD.exec(out);
+  if (role && role.index >= 2) out = out.slice(0, role.index);
+  return out.trim();
+}
 
 /**
  * 桩实现。**它不是 LLM 的替代品，是管线的脚手架。**
@@ -147,9 +168,10 @@ export class StubExtractor implements LLMExtractor {
  * 模型超时、没配模型时，管线也靠它补公司名。
  */
 export function companyFromSubject(subject: string): string | null {
-  for (const pattern of SUBJECT_COMPANY) {
+  for (const { pattern, prefix } of SUBJECT_COMPANY) {
     const hit = pattern.exec(subject);
-    const value = hit?.[1]?.trim();
+    const raw = hit?.[1]?.trim();
+    const value = raw !== undefined && prefix ? trimPrefix(raw) : raw;
     if (value === undefined || value.length < 2) continue;
     // 「王同学的面试邀请」「张三的笔试通知」：「X的」是收件人，不是公司
     if (value.endsWith("的")) continue;

@@ -12,11 +12,22 @@ export interface NoticeRow {
 }
 
 /** 看板详情里「模型和规则各管什么」那句。 */
-export function extractorNote(models: ReadonlyMap<string, string | null>, ids: readonly string[]): string {
+export function extractorNote(
+  models: ReadonlyMap<string, string | null>,
+  ids: readonly string[],
+  errors: ReadonlyMap<string, string | null> = new Map(),
+): string {
   const used = [...new Set(ids.map((id) => models.get(id)).filter((m): m is string => typeof m === "string"))];
-  return used.length > 0
-    ? `公司、岗位、时间片段由模型从原文摘出（${used.join("、")}）；是什么事、什么时候、哪个时区由规则判断。`
-    : "这封没有用到模型（没配置、你关掉了 AI、当天额度用完，或调用失败后退回了纯规则），全部由规则判断。";
+  if (used.length > 0) return `公司、岗位、时间片段由模型从原文摘出（${used.join("、")}）；是什么事、什么时候、哪个时区由规则判断。`;
+  // 没用上模型：照收信时记下的原因说清楚是哪一种，用户才知道该怎么办
+  const reason = ids.map((id) => errors.get(id)).find((e): e is string => typeof e === "string" && e.length > 0) ?? null;
+  if (reason?.startsWith("模型调用失败")) {
+    const detail = reason.replace(/^模型调用失败，已退回纯规则[:：]?\s*/, "").slice(0, 80);
+    return `收信时 AI 没响应${detail ? `（${detail}）` : ""}，这封只用规则判断。可以在「设置 → 收信」里点「用 AI 重新解析」。`;
+  }
+  if (reason?.includes("关掉了 AI")) return "收信时你的 AI 是关着的，这封只用规则判断。在「设置 → AI 与简历」里可以打开。";
+  if (reason?.includes("额度用完")) return "收信那天的 AI 额度用完了，这封只用规则判断。";
+  return "收信时没有可用的 AI 模型（服务器没配置模型），这封只用规则判断。";
 }
 
 /** 转发确认只看最近 7 天的：开通转发是一次性的，过期的不必一直挂着。 */
@@ -100,4 +111,36 @@ export function forwardingNotices(notices: readonly NoticeRow[], nowMs: number):
     out.push({ id: notice.id, provider: notice.kind === "gmail-forwarding" ? "gmail" : "other", subject: notice.subject, receivedAt: notice.received_at, code, links, excerpt });
   }
   return out;
+}
+
+/**
+ * 保存手动操作（PUT /api/edits）的结果，页面该怎么办：
+ * - saved：存上了，记下云端的新版本号（老服务端不给版本号时为 null，之后就不带版本号存）
+ * - conflict：别处（另一台设备、另一个标签页）先改过了。云端没有动，把云端那份换到页面上，
+ *   刚才那一步要你再做一次——不替你合并，合错了比多点一下糟得多
+ * - signed-out：登录过期
+ * - failed：其他错误
+ */
+export type SaveOutcome =
+  | { kind: "saved"; version: string | null }
+  | { kind: "conflict"; edits: unknown; version: string }
+  | { kind: "signed-out" }
+  | { kind: "failed" };
+
+export function saveOutcome(status: number, body: unknown): SaveOutcome {
+  const b = (typeof body === "object" && body !== null ? body : {}) as { version?: unknown; conflict?: unknown; edits?: unknown };
+  if (status === 401) return { kind: "signed-out" };
+  if (status >= 200 && status < 300) return { kind: "saved", version: typeof b.version === "string" ? b.version : null };
+  if (status === 409 && b.conflict === true && typeof b.version === "string") return { kind: "conflict", edits: b.edits ?? null, version: b.version };
+  return { kind: "failed" };
+}
+
+/**
+ * 标题下面那句「N 封转发来的邮件」。存的比显示的多时必须说出来：
+ * 悄悄少掉的信，对应的日程和投递记录也跟着消失，而你不会知道。
+ */
+export function emailCountNotice(shown: number, total: number | null, inbox: string): string {
+  if (shown === 0) return `还没有收到邮件（招聘邮件转发到 ${inbox} 就会出现在这里）`;
+  if (total !== null && total > shown) return `只显示最近 ${shown} 封（一共存了 ${total} 封）：更早的信不在看板、日历和提醒里`;
+  return `${shown} 封转发来的邮件`;
 }

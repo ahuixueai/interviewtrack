@@ -7,6 +7,8 @@ import { highlightSegments } from "@/lib/demo/highlight";
 import type { Mark, MarkKind } from "@/lib/demo/highlight";
 import {
   collectAccess,
+  linkLabel,
+  splitLinks,
   CONFIDENCE_LABEL,
   DESTINATION_HINT,
   DESTINATION_LABEL,
@@ -185,6 +187,7 @@ export function DetailPanel({
   // 合并的事把几封信里的链接和密钥并到一起：催办信里常常不再重复密钥
   const access = collectAccess(emails.map((email) => email.result));
   const hasAccess = access.links.length > 0 || access.credentials.length > 0;
+  const { main: mainLinks, more: moreLinks } = splitLinks(access.links);
   const company = result.displayCompany.length > 0 ? result.displayCompany : "公司未认出";
 
   return (
@@ -334,12 +337,25 @@ export function DetailPanel({
           {!dropped && hasAccess ? (
             <Section title="入口与密钥">
               <div className="space-y-2 rounded-xl border border-hairline bg-surface p-4" data-access>
-                {access.links.map((link, i) => (
-                  <AccessRow key={link} label={i === 0 ? "入口链接" : "其他链接"} value={link} href={link} />
+                {mainLinks.map((link) => (
+                  <AccessRow key={link.url} label={linkLabel(link)} value={link.url} href={link.url} />
                 ))}
                 {access.credentials.map((credential) => (
                   <AccessRow key={credential.value} label={credential.label} value={credential.value} />
                 ))}
+                {moreLinks.length > 0 ? (
+                  // 练习题、浏览器下载、须知：考前可能用得上，但不是入口，默认收起
+                  <details className="group text-sm" data-more-links>
+                    <summary className="cursor-pointer py-1 text-ink-soft select-none hover:text-ink">
+                      其他链接（{moreLinks.length}）<span className="text-xs text-ink-faint">练习、须知、下载等</span>
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      {moreLinks.map((link) => (
+                        <AccessRow key={link.url} label={linkLabel(link)} value={link.url} href={link.url} />
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
               </div>
               <p className="mt-2 text-xs leading-relaxed text-ink-faint">
                 从邮件原文逐字摘出，没有经过模型。点开链接前请核对网址是不是这家公司的。
@@ -378,11 +394,17 @@ export function DetailPanel({
           {dropped || result.trace.length === 0 ? null : (
             <Section title="系统是怎么判断的">
               <p className="text-sm leading-relaxed text-ink-soft">
-                {DESTINATION_HINT[result.destination]}
+                {/* 你确认过的事 result 已经改成「在日程上」；这里要说的是系统当初的判断，用原信的那份 */}
+                {result.preNotice
+                  ? "这是预通知：正式邀请还没发，信里的日期是发邀请的日子。先记进投递表，正式邮件到了会自动排进日程。"
+                  : DESTINATION_HINT[emails[0]?.result?.destination ?? result.destination]}
                 {result.confidence ? ` 把握：${CONFIDENCE_LABEL[result.confidence]}。` : null}
               </p>
+              {/* 一步步的依据是写给想细看的人的（术语多），默认收起 */}
+              <details className="mt-2" data-trace>
+                <summary className="cursor-pointer text-xs text-ink-soft select-none hover:text-ink">看判断过程</summary>
               {result.confidenceReasons.length > 0 ? (
-                <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+                <p className="mt-2 text-xs leading-relaxed text-ink-faint">
                   {result.confidenceReasons.join("；")}
                 </p>
               ) : null}
@@ -402,6 +424,7 @@ export function DetailPanel({
                 ))}
               </ol>
               <p className="mt-3 text-xs leading-relaxed text-ink-faint">{extractorNote}</p>
+              </details>
             </Section>
           )}
         </div>
@@ -427,7 +450,7 @@ function AccessRow({ label, value, href }: { label: string; value: string; href?
     );
   };
   return (
-    <div className="grid grid-cols-[5.5rem_1fr_auto] items-start gap-x-3 text-sm">
+    <div className="grid grid-cols-[7rem_1fr_auto] items-start gap-x-3 text-sm">
       <span className="pt-0.5 text-ink-soft">{label}</span>
       {href ? (
         <a
@@ -445,7 +468,7 @@ function AccessRow({ label, value, href }: { label: string; value: string; href?
         type="button"
         onClick={copy}
         aria-label={`复制${label}`}
-        className="rounded-lg p-1 text-ink-soft hover:bg-raised"
+        className="rounded-lg p-2.5 text-ink-soft hover:bg-raised md:p-1"
       >
         {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
       </button>

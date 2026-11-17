@@ -22,8 +22,8 @@ export { classifyEventType } from "./eventType.js";
 export type { EventTypeSignals, EventTypeClassification } from "./eventType.js";
 export { classifyEventFormat } from "./eventFormat.js";
 export type { EventFormat, EventFormatClassification } from "./eventFormat.js";
-export { extractActionInfo, extractCredentials, extractLinks } from "./actionInfo.js";
-export type { ActionInfo, Credential } from "./actionInfo.js";
+export { extractActionInfo, extractCredentials, extractLinkDetails, extractLinks, linkKindRank } from "./actionInfo.js";
+export type { ActionInfo, Credential, LinkDetail, LinkKind } from "./actionInfo.js";
 export { classifyDue, classifyDueFromSignals } from "./dueType.js";
 export type { DueClassification } from "./dueType.js";
 export { buildDedupKey, dedupKeyOf, foldEvents, mergeEvent, toStoredEvent } from "./dedup.js";
@@ -36,3 +36,4 @@ export {
   zoneAbbr,
 } from "./timezone.js";
 export type { DualDisplay, TimeZoneInference, TimeZoneSignals } from "./timezone.js";
+export { decodeHtmlEntities } from "./text.js";

@@ -208,9 +208,12 @@ function assemble(
    * 模型和规则对「哪个时间才是正事」看法不同，这件事必须让用户看见。
    * 只认还没到的场次——已经过去的时刻多半是签名档、引用历史里的旧时间。
    */
-  let due = focused;
+  // 预通知：信里的日期是「正式邀请哪天发」，「收到后 7 天内」也是从那封还没来的信算起——都不是这件事的时间
+  let due: typeof focused = ruleType.preNotice
+    ? { dueType: "unknown", startUtc: null, endUtc: null, confidence: "high", reason: "预通知：信里的日期是正式邀请发出的日子，不是这件事的时间", explicitTimeZone: focused.explicitTimeZone }
+    : focused;
   let timeScopeConflict = false;
-  if (extraction.timeText !== null && focused.dueType !== "fixed_start") {
+  if (!ruleType.preNotice && extraction.timeText !== null && focused.dueType !== "fixed_start") {
     const whole = classifyDue(email.text, email.receivedAtUtc, tz.tz ?? "");
     if (
       whole.dueType === "fixed_start" &&

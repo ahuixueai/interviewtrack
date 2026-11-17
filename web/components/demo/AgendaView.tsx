@@ -4,15 +4,17 @@ import { useState } from "react";
 import { Check, ChevronDown, Plus } from "lucide-react";
 import { BulkBar } from "@/components/demo/EmailView";
 import { ActionButton, ConfirmButton, EventCard } from "@/components/demo/EventCard";
-import { phaseOf } from "@/lib/demo/agenda";
+import { dateKeyIn, phaseOf } from "@/lib/demo/agenda";
 import type { AgendaItem } from "@/lib/demo/agenda";
 import { pendingReason } from "@/lib/demo/parseDemo";
 
 /** 日程和待确认两个视图都要用的那几个动作。 */
 export interface AgendaActions {
   onDetail: (item: AgendaItem) => void;
-  /** 打开「放进日程」表单。 */
+  /** 放进日程：信息齐全的直接放进，缺时间的打开表单补。 */
   onConfirm: (item: AgendaItem) => void;
+  /** 批量放进日程（待确认里勾选后）：齐全的放进，缺时间的留下。 */
+  onConfirmMany?: (items: readonly AgendaItem[]) => void;
   /** 只记到投递表，不上日程。 */
   onTrack: (item: AgendaItem) => void;
   /** 与求职无关。可以一次好几件（待确认里勾选后批量）。 */
@@ -83,7 +85,8 @@ export function RemoveButton({ item, onRemove }: { item: AgendaItem; onRemove: (
 /**
  * 「日程」视图：一件事一张卡。
  *
- * 还没做的按「要准点到 / 截止前完成 / 没有具体时间」分组——这三类要你做的事不一样。
+ * 还没做的**按时间排成一列**，按天加小标题（今天 / 明天 / 11月4日 周三）：最急的永远在最上面，
+ * 不管它是笔试还是测评截止——是什么事看卡片上的标签。没有具体时间的放在最后。
  * 时间已经过了、你还没说做没做的，单独放「做了吗？」：**不替你算完成**，可能是错过了。
  * 做完的折叠在最下面，随时能撤销。
  */
@@ -102,16 +105,7 @@ export function AgendaView({
   const active = board.filter((item) => phaseOf(item, nowMs) === "active");
   const overdue = board.filter((item) => phaseOf(item, nowMs) === "overdue");
   const done = board.filter((item) => phaseOf(item, nowMs) === "done");
-  const groups: readonly { title: string; items: AgendaItem[] }[] = [
-    { title: "要准点到", items: active.filter((item) => item.result.dueType === "fixed_start") },
-    { title: "截止前完成", items: active.filter((item) => item.result.dueType === "deadline") },
-    {
-      title: "没有具体时间",
-      items: active.filter(
-        (item) => item.result.dueType !== "fixed_start" && item.result.dueType !== "deadline",
-      ),
-    },
-  ];
+  const groups = dayGroups(active, viewerTimeZone, nowMs);
 
   return (
     <div>
@@ -128,7 +122,7 @@ export function AgendaView({
           {groups
             .filter((group) => group.items.length > 0)
             .map((group) => (
-              <section key={group.title} aria-label={group.title} data-agenda-group={group.title}>
+              <section key={group.key} aria-label={group.title} data-agenda-group={group.key}>
                 <h2 className="text-sm font-semibold text-ink">
                   {group.title}
                   <span className="tabular ml-2 text-xs font-normal text-ink-faint">{group.items.length}</span>
@@ -141,6 +135,47 @@ export function AgendaView({
       )}
     </div>
   );
+}
+
+const WEEKDAY = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+/** 「11月4日 周三」。dateKey 是 YYYY-MM-DD（已经是你所在时区的日期）。 */
+function dateTitle(dateKey: string): string {
+  const [y, m, d] = dateKey.split("-").map(Number) as [number, number, number];
+  const weekday = WEEKDAY[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${m}月${d}日 ${weekday}`;
+}
+
+/**
+ * 按你所在时区的日期分组，组和组里都按时间先后。
+ * 今天、明天写在前面（「今天 · 11月2日 周一」）；没有具体时间的单独一组放最后。
+ */
+export function dayGroups(
+  items: readonly AgendaItem[],
+  viewerTimeZone: string,
+  nowMs: number,
+): { key: string; title: string; items: AgendaItem[] }[] {
+  const today = dateKeyIn(nowMs, viewerTimeZone);
+  const tomorrow = dateKeyIn(nowMs + 86_400_000, viewerTimeZone);
+  const timed = items
+    .filter((item) => item.result.when !== null)
+    .sort((a, b) => Date.parse(a.result.when?.utc ?? "") - Date.parse(b.result.when?.utc ?? ""));
+  const out: { key: string; title: string; items: AgendaItem[] }[] = [];
+  for (const item of timed) {
+    // 只知道日期的按信里那一天算，不按换算到你这边的「前一天」
+    const zone = item.result.dueType === "date_only" && item.result.timeZone ? item.result.timeZone : viewerTimeZone;
+    const key = dateKeyIn(item.result.when?.utc ?? "", zone);
+    const last = out[out.length - 1];
+    if (last && last.key === key) {
+      last.items.push(item);
+      continue;
+    }
+    const prefix = key === today ? "今天 · " : key === tomorrow ? "明天 · " : "";
+    out.push({ key, title: `${prefix}${dateTitle(key)}`, items: [item] });
+  }
+  const untimed = items.filter((item) => item.result.when === null);
+  if (untimed.length > 0) out.push({ key: "untimed", title: "没有具体时间", items: untimed });
+  return out;
 }
 
 /** 「已过时间，做了吗？」——日程和「今天」都用。 */
@@ -281,6 +316,18 @@ export function PendingView({
           {picked.length > 0 ? (
             <div className="mt-3">
               <BulkBar count={picked.length} onClear={clear}>
+                {actions.onConfirmMany ? (
+                  <ActionButton
+                    onClick={() => {
+                      actions.onConfirmMany?.(picked);
+                      clear();
+                    }}
+                    tone="primary"
+                    action="bulk-confirm"
+                  >
+                    放进日程
+                  </ActionButton>
+                ) : null}
                 <ActionButton
                   onClick={() => {
                     actions.onIgnore(picked);
@@ -426,7 +473,7 @@ export function CompleteButton({
       onClick={() => onComplete(item, "done")}
       aria-label={`把${company}这件事标为完成`}
       data-action="complete"
-      className="inline-flex items-center gap-1 rounded-lg bg-brand-soft px-3 py-1 text-xs font-semibold text-on-brand-soft hover:opacity-85"
+      className="inline-flex min-h-10 items-center gap-1 rounded-lg bg-brand-soft px-3.5 py-2 text-sm font-semibold text-on-brand-soft hover:opacity-85 md:min-h-0 md:px-3 md:py-1 md:text-xs"
     >
       <Check size={13} aria-hidden />
       完成

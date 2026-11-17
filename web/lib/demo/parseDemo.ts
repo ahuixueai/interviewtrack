@@ -1,4 +1,4 @@
-import { dedupKeyOf, parseEmail, route, StubExtractor } from "../tracker-core/index";
+import { dedupKeyOf, linkKindRank, parseEmail, route, StubExtractor } from "../tracker-core/index";
 import type {
   Confidence,
   Credential,
@@ -6,6 +6,8 @@ import type {
   EventFormat,
   EventType,
   Extraction,
+  LinkDetail,
+  LinkKind,
   LLMExtractor,
   ParseOutcome,
   RawEmail,
@@ -52,7 +54,7 @@ export function kindLabelOf(eventType: EventType, format: EventFormat): string {
 }
 
 export const DUE_LABEL: Readonly<Record<DueType, string>> = {
-  fixed_start: "准点开始",
+  fixed_start: "按时开始",
   deadline: "截止前完成",
   date_only: "只知道日期",
   unknown: "没有时间",
@@ -164,6 +166,13 @@ export interface DemoResult {
   extraction: Extraction | null;
   /** 入口链接：测评、笔试、会议的地址。规则从原文逐字摘出。 */
   links: readonly string[];
+  /**
+   * 和 links 同序：每个链接是干什么的（入口 / 确认参加 / 练习 / 须知）、信里怎么叫它。
+   * 10/30 之前解析的信没有这一项，用 linkDetailsOf 读。
+   */
+  linkDetails?: readonly LinkDetail[];
+  /** 预通知（「正式测试链接将于 11 月 1 日发到你邮箱」）：不上日程、不进待确认，只记进投递表。 */
+  preNotice?: boolean;
   /** 凭据：测评密钥、考试码、会议号等。规则从原文逐字摘出。 */
   credentials: readonly Credential[];
   trace: readonly TraceStep[];
@@ -229,6 +238,11 @@ export interface TimeSummary {
  * 事件当地的钟点放在详情里。截止期限带「前」字，和准点开始区分开。
  */
 export function timeSummary(result: DemoResult, viewerTimeZone: string): TimeSummary {
+  // 只知道日期：存的是那天零点，换到你的时区会变成「前一天中午 12:00」这种假钟点。只写信里那一天
+  if (result.dueType === "date_only" && result.when !== null) {
+    const shown = result.when.source ?? result.when.viewer ?? "";
+    return { text: `${shown.slice(0, shown.lastIndexOf(" "))} · 只知道日期`, zone: null };
+  }
   if (result.when !== null && result.when.viewer !== null) {
     const suffix = result.dueType === "deadline" ? " 前" : "";
     return { text: `${result.when.viewer}${suffix}`, zone: zoneLabel(viewerTimeZone) };
@@ -236,6 +250,26 @@ export function timeSummary(result: DemoResult, viewerTimeZone: string): TimeSum
   // 拿不准的和本来就没有时间的要分开说：前者需要用户补，后者不需要
   if (result.destination === "pending") return { text: "时间待确认", zone: null };
   return { text: "没有具体时间", zone: null };
+}
+
+/**
+ * 卡片上那行灰色小字：信里原来的时间（「= 北京时间 14:00」）。
+ * 只在两地钟点不同时给；同一天只写钟点，跨了天才带日期。只知道日期的、时区不明的不给。
+ */
+export function sourceTimeLine(result: DemoResult): string | null {
+  const when = result.when;
+  if (when === null || when.source === null || when.viewer === null || when.sameZone) return null;
+  if (result.timeZone === null || result.dueType === "date_only") return null;
+  const sameDay = when.source.slice(0, when.source.lastIndexOf(" ")) === when.viewer.slice(0, when.viewer.lastIndexOf(" "));
+  const shown = sameDay ? when.source.slice(when.source.lastIndexOf(" ") + 1) : when.source;
+  return `= ${zoneLabel(result.timeZone)} ${shown}${result.dueType === "deadline" ? " 前" : ""}`;
+}
+
+/** 按时开始的事落在你这边的 0 点到 6 点之前：卡片上标「凌晨」。截止期限不标（深夜截止很常见，不用爬起来）。 */
+export function isLateNight(result: DemoResult): boolean {
+  if (result.dueType !== "fixed_start" || result.when?.viewer == null) return false;
+  const hour = /(\d{2}):\d{2}$/.exec(result.when.viewer)?.[1];
+  return hour !== undefined && Number(hour) < 6;
 }
 
 /**
@@ -259,23 +293,54 @@ export function pendingReason(result: DemoResult): string {
   return "有关键信息拿不准，详情里有具体原因。";
 }
 
+const LINK_FALLBACK_LABEL: Readonly<Record<LinkKind, string>> = {
+  entry: "入口链接",
+  confirm: "确认参加",
+  practice: "练习 / 模拟",
+  info: "说明",
+  other: "链接",
+};
+
+/** 链接的显示名：信里怎么叫就怎么叫，看不出就按用途给个通用名。 */
+export function linkLabel(link: LinkDetail): string {
+  return link.label ?? LINK_FALLBACK_LABEL[link.kind];
+}
+
+/** 每个链接是干什么的。老数据没有 linkDetails：第一个当入口（和以前显示的一样），其余看不出。 */
+export function linkDetailsOf(result: Pick<DemoResult, "links" | "linkDetails">): LinkDetail[] {
+  if (result.linkDetails && result.linkDetails.length === result.links.length) return [...result.linkDetails];
+  return result.links.map((url, i) => ({ url, kind: i === 0 ? "entry" : "other", label: null }));
+}
+
+/**
+ * 摆在明面上的链接：所有入口和「确认参加」；一个都没有时退回第一个看不出用途的。
+ * 练习、须知、下载放进 more，点开才看——一封牛客通知有五个链接，全摆出来就分不清该点哪个。
+ */
+export function splitLinks(links: readonly LinkDetail[]): { main: LinkDetail[]; more: LinkDetail[] } {
+  let main = links.filter((l) => l.kind === "entry" || l.kind === "confirm");
+  if (main.length === 0) main = links.filter((l) => l.kind === "other").slice(0, 1);
+  return { main, more: links.filter((l) => !main.includes(l)) };
+}
+
 /**
  * 一件事可能来自几封邮件（通知 + 催办），链接和凭据取并集：
- * 催办信里常常不再重复密钥，只看其中一封会漏。按出现顺序去重。
+ * 催办信里常常不再重复密钥，只看其中一封会漏。按出现顺序去重，链接再按用途排（入口在前）。
  */
 export function collectAccess(results: readonly (DemoResult | undefined)[]): {
-  links: string[];
+  links: LinkDetail[];
   credentials: Credential[];
 } {
-  const links: string[] = [];
+  const links: LinkDetail[] = [];
   const credentials: Credential[] = [];
   for (const result of results) {
     if (!result) continue;
-    for (const link of result.links) if (!links.includes(link)) links.push(link);
+    for (const link of linkDetailsOf(result)) if (!links.some((l) => l.url === link.url)) links.push(link);
     for (const credential of result.credentials) {
       if (!credentials.some((c) => c.value === credential.value)) credentials.push(credential);
     }
   }
+  // sort 是稳定的：同类保持出现顺序
+  links.sort((a, b) => linkKindRank(a.kind) - linkKindRank(b.kind));
   return { links, credentials };
 }
 
@@ -377,6 +442,8 @@ export function toDemoResult(outcome: ParseOutcome, viewerTimeZone: string): Dem
     dedupKey: dedupKeyOf(event),
     extraction: trace.extraction,
     links: trace.action.links,
+    linkDetails: trace.action.linkDetails,
+    ...(trace.eventType.preNotice ? { preNotice: true } : {}),
     credentials: trace.action.credentials,
     trace: steps,
   };

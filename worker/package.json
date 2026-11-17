@@ -18,7 +18,9 @@
     "db:why": "wrangler d1 execute jobhunt-inbox --remote --command \"SELECT subject, from_addr, received_at, json_extract(outcome, '\\$.trace.extraction.timeText') AS model_time_text, json_extract(outcome, '\\$.trace.due.reason') AS time_reason, json_extract(outcome, '\\$.trace.tz.reason') AS tz_reason, json_extract(outcome, '\\$.trace.confidenceReasons') AS why_pending, length(body) AS body_chars FROM emails ORDER BY stored_at DESC LIMIT 5\"",
     "import": "node scripts/import-gmail.mjs",
     "db:review": "wrangler d1 execute jobhunt-inbox --remote --command \"SELECT substr(received_at, 1, 16) AS received, status, substr(from_addr, 1, 36) AS sender, substr(subject, 1, 40) AS subject, json_extract(outcome, '\\$.event.eventType') AS type, json_extract(outcome, '\\$.event.confidence') AS conf, coalesce(json_extract(outcome, '\\$.reason'), json_extract(outcome, '\\$.trace.prefilter.reason')) AS why FROM emails ORDER BY received_at DESC LIMIT 40\"",
-    "reparse": "node scripts/reparse.mjs"
+    "reparse": "node scripts/reparse.mjs",
+    "e2e:serve": "vite build && wrangler d1 migrations apply jobhunt-inbox --local --persist-to .wrangler/e2e && wrangler dev --local --port 8787 --ip 127.0.0.1 --persist-to .wrangler/e2e --var DEV_INSECURE_AUTH:1 --var SESSION_SECRET:local-e2e-only-not-a-real-secret-0000",
+    "e2e": "node e2e/smoke.mjs"
   },
   "dependencies": {
     "mammoth": "1.13.0",
@@ -36,8 +38,8 @@
     "react-dom": "19.2.8",
     "tailwindcss": "4.3.3",
     "typescript": "^5.9.2",
-    "vite": "7.3.6",
-    "vitest": "^3.2.4",
-    "wrangler": "4.151.0"
+    "vite": "7.3.8",
+    "vitest": "^4.1.12",
+    "wrangler": "4.163.0"
   }
 }

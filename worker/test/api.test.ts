@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { handleApi } from "../src/api.js";
 import type { Env } from "../src/types.js";
 import { insertEmail, owner } from "./helpers.js";
+import { MAX_EMAILS_LOADED } from "../src/store.js";
 import { testDb } from "./testDb.js";
 import type { TestDb } from "./testDb.js";
 
@@ -72,10 +73,28 @@ describe("看板接口", () => {
     t.exec("INSERT INTO notices (id, user_id, kind, received_at, subject, body) VALUES ('n', ?, 'gmail-forwarding', '2026-10-11T00:00:00.000Z', 'Gmail', '验证码：1')", me.id);
     const res = await handleApi(req("/api/emails", { cookie }), e, NOW);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { emails: { id: string }[] };
+    const body = (await res.json()) as { emails: { id: string }[]; total: number };
     expect(body.emails.map((x) => x.id)).toEqual(["b", "a"]);
+    expect(body.total).toBe(2);
     const n = (await (await handleApi(req("/api/notices", { cookie }), e, NOW)).json()) as { notices: unknown[] };
     expect(n.notices).toHaveLength(1);
+  });
+
+  it("信多到超过一次读的上限：只回最新的那些，但把总数一起告诉看板", async () => {
+    const t = fresh();
+    const e = env(t.db);
+    const cookie = await login(e);
+    const me = await owner(e);
+    const base = Date.parse("2026-01-01T00:00:00Z");
+    for (let i = 0; i < MAX_EMAILS_LOADED + 3; i++) {
+      await insertEmail(e, me.id, { id: `m${i}`, received_at: new Date(base + i * 60_000).toISOString(), subject: `第 ${i} 封` });
+    }
+    const body = (await (await handleApi(req("/api/emails", { cookie }), e, NOW)).json()) as { emails: { id: string }[]; total: number };
+    expect(body.emails).toHaveLength(MAX_EMAILS_LOADED);
+    expect(body.total).toBe(MAX_EMAILS_LOADED + 3);
+    // 留下的是最新的；最早那 3 封不在
+    expect(body.emails[0]!.id).toBe(`m${MAX_EMAILS_LOADED + 2}`);
+    expect(body.emails.some((x) => x.id === "m0")).toBe(false);
   });
 
   it("手动操作：存进去再读出来；形状不对、太大都拒绝", async () => {

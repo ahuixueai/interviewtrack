@@ -10,6 +10,23 @@ const NAMED_ENTITIES: Readonly<Record<string, string>> = {
   gt: ">",
   quot: '"',
   apos: "'",
+  // 排版符号：中文模板常把引号、省略号写成实体（有的拒信里满是 &ldquo;不匹配&rdquo;）
+  ldquo: "“",
+  rdquo: "”",
+  lsquo: "‘",
+  rsquo: "’",
+  laquo: "«",
+  raquo: "»",
+  hellip: "…",
+  mdash: "—",
+  ndash: "–",
+  middot: "·",
+  bull: "•",
+  times: "×",
+  yen: "¥",
+  copy: "©",
+  reg: "®",
+  trade: "™",
 };
 
 /**

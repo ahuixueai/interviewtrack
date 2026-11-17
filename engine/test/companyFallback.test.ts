@@ -47,6 +47,18 @@ describe("套话剥离", () => {
     expect(companyFromSubject("张三的面试邀请")).toBeNull();
     expect(companyFromSubject("【星河科技】一面邀请")).toBe("星河科技");
   });
+
+  it("标题前缀把岗位和面试形式一起带进来时，只留公司名", () => {
+    expect(companyFromSubject("远山动力 产品经理岗位视频面试邀请")).toBe("远山动力");
+    expect(companyFromSubject("远山动力产品经理岗位视频面试邀请")).toBe("远山动力");
+    expect(companyFromSubject("云帆物流-管理培训生笔试通知")).toBe("云帆物流");
+    expect(companyFromSubject("星河科技视频面试邀请")).toBe("星河科技");
+    // 公司名里带「咨询」「科技」的不能被切掉
+    expect(companyFromSubject("北辰咨询测评邀请")).toBe("北辰咨询");
+    expect(companyFromSubject("青禾消费 2027 校园招聘")).toBe("青禾消费");
+    // 英文公司名里本来就有空格，不能切
+    expect(companyFromSubject("Sierra Robotics 面试邀请")).toBe("Sierra Robotics");
+  });
 });
 
 describe("resolveCompany：模型没给公司名时的后备线索", () => {

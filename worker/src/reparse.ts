@@ -16,6 +16,7 @@ export const BATCH = 10;
 
 interface Row {
   id: string;
+  user_id: string;
   from_addr: string;
   subject: string;
   body: string;
@@ -39,20 +40,45 @@ export interface ReparseResult {
 /** 只重判「解析过的」：丢弃的（验证码等）预筛没变；你自己发的、出错的没有可回放的东西。 */
 export async function reparseBatch(env: Env, userId: string, after: string | null): Promise<ReparseResult> {
   const rows = await env.DB.prepare(
-    "SELECT id, from_addr, subject, body, received_at, status, outcome FROM emails WHERE user_id = ? AND status = 'parsed' AND id > ? ORDER BY id LIMIT ?",
+    "SELECT id, user_id, from_addr, subject, body, received_at, status, outcome FROM emails WHERE user_id = ? AND status = 'parsed' AND id > ? ORDER BY id LIMIT ?",
   )
     .bind(userId, after ?? "", BATCH)
     .all<Row>();
-  const zones = await loadCompanyZones(env, userId);
-  const jobTimeZone = (await loadPrefs(env, userId)).timeZones.job;
+  return replayRows(env, rows.results);
+}
+
+/**
+ * 作者用：引擎规则改了，所有人已存的邮件都按新规则重判（看板「设置 → 收信」里的按钮）。
+ * 每个人用自己的求职地和公司时区设置；只回封数，不回任何邮件内容。
+ */
+export async function reparseAllBatch(env: Env, after: string | null): Promise<ReparseResult> {
+  const rows = await env.DB.prepare(
+    "SELECT id, user_id, from_addr, subject, body, received_at, status, outcome FROM emails WHERE status = 'parsed' AND id > ? ORDER BY id LIMIT ?",
+  )
+    .bind(after ?? "", BATCH)
+    .all<Row>();
+  return replayRows(env, rows.results);
+}
+
+async function replayRows(env: Env, rows: readonly Row[]): Promise<ReparseResult> {
+  const settings = new Map<string, { zones: Record<string, string>; jobTimeZone: string | null }>();
+  const settingsOf = async (userId: string) => {
+    let found = settings.get(userId);
+    if (!found) {
+      found = { zones: await loadCompanyZones(env, userId), jobTimeZone: (await loadPrefs(env, userId)).timeZones.job };
+      settings.set(userId, found);
+    }
+    return found;
+  };
   let changed = 0;
-  for (const row of rows.results) {
+  for (const row of rows) {
     let old: ParseOutcome | null = null;
     try {
       old = row.outcome === null ? null : (JSON.parse(row.outcome) as ParseOutcome);
     } catch {
       old = null;
     }
+    const { zones, jobTimeZone } = await settingsOf(row.user_id);
     const extraction = old !== null && old.kind !== "dropped" ? old.trace.extraction : EMPTY_EXTRACTION;
     const outcome = await parseEmail(
       { id: row.id, from: row.from_addr, to: "", subject: row.subject, body: row.body, receivedAtUtc: row.received_at },
@@ -60,10 +86,10 @@ export async function reparseBatch(env: Env, userId: string, after: string | nul
     );
     const status = outcome.kind === "dropped" ? "dropped" : "parsed";
     if (summary(old) !== summary(outcome)) changed += 1;
-    await env.DB.prepare("UPDATE emails SET outcome = ?, status = ? WHERE id = ? AND user_id = ?").bind(JSON.stringify(outcome), status, row.id, userId).run();
+    await env.DB.prepare("UPDATE emails SET outcome = ?, status = ? WHERE id = ? AND user_id = ?").bind(JSON.stringify(outcome), status, row.id, row.user_id).run();
   }
-  const last = rows.results[rows.results.length - 1];
-  return { next: rows.results.length < BATCH || !last ? null : last.id, checked: rows.results.length, changed };
+  const last = rows[rows.length - 1];
+  return { next: rows.length < BATCH || !last ? null : last.id, checked: rows.length, changed };
 }
 
 function summary(outcome: ParseOutcome | null): string {
@@ -88,7 +114,7 @@ export interface RetryResult extends ReparseResult {
  */
 export async function retryModelBatch(env: Env, user: User, after: string | null, nowMs: number): Promise<RetryResult> {
   const rows = await env.DB.prepare(
-    `SELECT id, from_addr, subject, body, received_at, status, outcome FROM emails WHERE user_id = ? AND status = 'parsed' AND error LIKE '${MODEL_FAILED_PREFIX}%' AND id > ? ORDER BY id LIMIT ?`,
+    `SELECT id, user_id, from_addr, subject, body, received_at, status, outcome FROM emails WHERE user_id = ? AND status = 'parsed' AND error LIKE '${MODEL_FAILED_PREFIX}%' AND id > ? ORDER BY id LIMIT ?`,
   )
     .bind(user.id, after ?? "", RETRY_BATCH)
     .all<Row>();

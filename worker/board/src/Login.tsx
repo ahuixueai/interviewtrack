@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { storedAttribution } from "./attribution";
 import { BrandMark } from "@/components/demo/BrandMark";
+import { LoginShowcase, LoginTagline } from "./LoginShowcase";
 
 /**
  * 登录页：邮箱收 6 位验证码登录（新邮箱验证后自动建账号）；作者账号可以用密码登录（备用）。
@@ -87,7 +89,9 @@ const primary =
 
 export function Login({ onDone }: { onDone: () => void }) {
   const [config, setConfig] = useState<AuthConfig | null>(null);
-  const [mode, setMode] = useState<"code" | "password">("code");
+  // 密码登录是作者的备用入口，新用户看不到：只有打开 /?password 时才出现（并直接切到密码登录）
+  const [passwordEntry] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("password"));
+  const [mode, setMode] = useState<"code" | "password">(() => (passwordEntry ? "password" : "code"));
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -150,7 +154,7 @@ export function Login({ onDone }: { onDone: () => void }) {
 
   const verify = () =>
     run(async () => {
-      const r = await post("/api/auth/verify", { email: email.trim(), code });
+      const r = await post("/api/auth/verify", { email: email.trim(), code, source: storedAttribution() });
       if (r.ok) onDone();
       else setError(typeof r.data.error === "string" ? r.data.error : `登录失败（${r.status}）`);
     });
@@ -167,128 +171,139 @@ export function Login({ onDone }: { onDone: () => void }) {
 
   const human = config.turnstileSiteKey ? <Turnstile siteKey={config.turnstileSiteKey} resetKey={resetKey} onToken={setToken} /> : null;
   return (
-    <div className="flex min-h-full items-center justify-center px-4 py-16">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (busy) return;
-          if (mode === "password") void passwordLogin();
-          else if (step === "email") void sendCode();
-          else void verify();
-        }}
-        className="w-full max-w-sm rounded-card border border-hairline bg-surface p-6 shadow-card"
-        data-login={mode === "password" ? "password" : step}
-      >
-        <div className="flex items-center gap-3">
-          <BrandMark size={40} />
-          <div>
-            <h1 className="text-lg leading-tight font-bold tracking-[0.04em] text-ink">准点</h1>
-            <p className="text-xs text-ink-faint">InterviewTrack</p>
-          </div>
+    // 宽屏：左边动画、右边登录卡片；窄屏：一句话 + 卡片
+    <div className="flex min-h-dvh items-center justify-center px-4 py-16 xl:px-16">
+      <div className="zd-zoom flex w-full items-center justify-center gap-16 xl:max-w-[1120px] xl:justify-between">
+        <div className="hidden xl:block">
+          <LoginShowcase />
         </div>
+        <div className="flex w-full max-w-sm flex-col gap-8">
+          <div className="xl:hidden">
+            <LoginTagline compact />
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (busy) return;
+              if (mode === "password") void passwordLogin();
+              else if (step === "email") void sendCode();
+              else void verify();
+            }}
+            className="w-full max-w-sm rounded-card border border-hairline bg-surface p-6 shadow-card"
+            data-login={mode === "password" ? "password" : step}
+          >
+            <div className="flex items-center gap-3">
+              <BrandMark size={40} />
+              <div>
+                <h1 className="text-lg leading-tight font-bold tracking-[0.04em] text-ink">准点</h1>
+                <p className="text-xs text-ink-faint">InterviewTrack</p>
+              </div>
+            </div>
 
-        {mode === "password" ? (
-          <>
-            <p className="mt-5 text-sm text-ink-soft">备用登录：输入你设置的看板密码。</p>
-            <label className="mt-5 block text-sm text-ink-soft" htmlFor="password">
-              密码
-            </label>
-            <input id="password" type="password" autoComplete="current-password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} className={field} />
-            {human}
-            <button type="submit" disabled={busy || password.length === 0 || !humanReady} className={primary}>
-              {busy ? "登录中…" : "登录"}
-            </button>
-          </>
-        ) : step === "email" ? (
-          <>
-            <p className="mt-5 text-sm text-ink-soft">输入邮箱，我们发一个 6 位验证码给你。</p>
-            <p className="mt-3 rounded-lg border border-accent bg-accent-soft px-3 py-2 text-sm text-ink" data-gmail-tip>
-              <strong className="font-semibold">推荐用你投简历的 Gmail 登录</strong>：Gmail 设置转发最简单，粘贴一段就好，也最不容易漏信。QQ、163 等也能用，设置会多几步。
-            </p>
-            {config.registration ? (
-              <p className="mt-2 text-xs text-ink-faint" data-registration-open>
-                第一次用？同样输入邮箱就行，验证后自动建账号（内测中，名额有限）。
+            {mode === "password" ? (
+              <>
+                <p className="mt-5 text-sm text-ink-soft">备用登录：输入你设置的看板密码。</p>
+                <label className="mt-5 block text-sm text-ink-soft" htmlFor="password">
+                  密码
+                </label>
+                <input id="password" type="password" autoComplete="current-password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} className={field} />
+                {human}
+                <button type="submit" disabled={busy || password.length === 0 || !humanReady} className={primary}>
+                  {busy ? "登录中…" : "登录"}
+                </button>
+              </>
+            ) : step === "email" ? (
+              <>
+                <p className="mt-5 text-sm text-ink-soft">输入邮箱，我们发一个 6 位验证码给你。</p>
+                <p className="mt-3 rounded-lg border border-accent bg-accent-soft px-3 py-2 text-sm text-ink" data-gmail-tip>
+                  <strong className="font-semibold">推荐用你投简历的 Gmail 登录</strong>：Gmail 设置转发最简单，粘贴一段就好，也最不容易漏信。QQ、163 等也能用，设置会多几步。
+                </p>
+                {config.registration ? (
+                  <p className="mt-2 text-xs text-ink-faint" data-registration-open>
+                    第一次用？同样输入邮箱就行，验证后自动建账号（内测中，名额有限）。
+                  </p>
+                ) : null}
+                <label className="mt-5 block text-sm text-ink-soft" htmlFor="email">
+                  邮箱
+                </label>
+                <input id="email" type="email" autoComplete="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} className={field} />
+                {human}
+                <button type="submit" disabled={busy || !emailOk || !humanReady || waiting > 0} className={primary} data-action="send-code">
+                  {busy ? "发送中…" : waiting > 0 ? `${waiting} 秒后可再发` : "发送验证码"}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="mt-1 text-sm text-ink-soft" data-code-sent>
+                  验证码已发到 <span className="text-ink">{email.trim()}</span>，10 分钟内有效。没收到就看看垃圾邮件。
+                </p>
+                {devCode ? (
+                  <p className="mt-2 rounded-lg bg-accent-soft px-3 py-2 text-xs text-ink" data-dev-code>
+                    本地开发模式，没有真的发信：验证码 <span className="font-mono font-semibold">{devCode}</span>
+                  </p>
+                ) : null}
+                <label className="mt-5 block text-sm text-ink-soft" htmlFor="code">
+                  验证码
+                </label>
+                <input
+                  id="code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  maxLength={6}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                  className={`${field} font-mono text-lg tracking-[0.4em]`}
+                />
+                <button type="submit" disabled={busy || code.length !== 6} className={primary} data-action="verify-code">
+                  {busy ? "登录中…" : "登录"}
+                </button>
+                <div className="mt-3 flex items-center justify-between text-xs">
+                  <button type="button" onClick={() => { setStep("email"); setError(null); }} className="text-ink-soft hover:text-ink">
+                    换个邮箱
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void sendCode()}
+                    disabled={busy || waiting > 0 || !humanReady}
+                    data-action="resend-code"
+                    className="text-on-brand-soft hover:underline disabled:text-ink-faint disabled:no-underline"
+                  >
+                    {waiting > 0 ? `${waiting} 秒后可重新发送` : "重新发送"}
+                  </button>
+                </div>
+                {human}
+              </>
+            )}
+
+            {error ? (
+              <p role="alert" className="mt-3 text-sm text-on-drop-soft">
+                {error}
               </p>
             ) : null}
-            <label className="mt-5 block text-sm text-ink-soft" htmlFor="email">
-              邮箱
-            </label>
-            <input id="email" type="email" autoComplete="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} className={field} />
-            {human}
-            <button type="submit" disabled={busy || !emailOk || !humanReady || waiting > 0} className={primary} data-action="send-code">
-              {busy ? "发送中…" : waiting > 0 ? `${waiting} 秒后可再发` : "发送验证码"}
-            </button>
-          </>
-        ) : (
-          <>
-            <p className="mt-1 text-sm text-ink-soft" data-code-sent>
-              验证码已发到 <span className="text-ink">{email.trim()}</span>，10 分钟内有效。没收到就看看垃圾邮件。
-            </p>
-            {devCode ? (
-              <p className="mt-2 rounded-lg bg-accent-soft px-3 py-2 text-xs text-ink" data-dev-code>
-                本地开发模式，没有真的发信：验证码 <span className="font-mono font-semibold">{devCode}</span>
-              </p>
-            ) : null}
-            <label className="mt-5 block text-sm text-ink-soft" htmlFor="code">
-              验证码
-            </label>
-            <input
-              id="code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              autoFocus
-              maxLength={6}
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-              className={`${field} font-mono text-lg tracking-[0.4em]`}
-            />
-            <button type="submit" disabled={busy || code.length !== 6} className={primary} data-action="verify-code">
-              {busy ? "登录中…" : "登录"}
-            </button>
-            <div className="mt-3 flex items-center justify-between text-xs">
-              <button type="button" onClick={() => { setStep("email"); setError(null); }} className="text-ink-soft hover:text-ink">
-                换个邮箱
-              </button>
+
+            {config.passwordLogin && passwordEntry ? (
               <button
                 type="button"
-                onClick={() => void sendCode()}
-                disabled={busy || waiting > 0 || !humanReady}
-                data-action="resend-code"
-                className="text-on-brand-soft hover:underline disabled:text-ink-faint disabled:no-underline"
+                onClick={() => {
+                  setMode(mode === "password" ? "code" : "password");
+                  setError(null);
+                }}
+                data-action="use-password"
+                className="mt-5 block w-full text-center text-xs text-ink-faint hover:text-ink-soft"
               >
-                {waiting > 0 ? `${waiting} 秒后可重新发送` : "重新发送"}
+                {mode === "password" ? "用邮箱验证码登录" : "收不到验证码？用密码登录（备用）"}
               </button>
-            </div>
-            {human}
-          </>
-        )}
-
-        {error ? (
-          <p role="alert" className="mt-3 text-sm text-on-drop-soft">
-            {error}
-          </p>
-        ) : null}
-
-        {config.passwordLogin ? (
-          <button
-            type="button"
-            onClick={() => {
-              setMode(mode === "password" ? "code" : "password");
-              setError(null);
-            }}
-            data-action="use-password"
-            className="mt-5 block w-full text-center text-xs text-ink-faint hover:text-ink-soft"
-          >
-            {mode === "password" ? "用邮箱验证码登录" : "收不到验证码？用密码登录（备用）"}
-          </button>
-        ) : null}
-        <p className="mt-4 text-center text-xs text-ink-faint">
-          {config.registration ? "登录或注册即表示同意" : "登录即表示同意"}
-          <a href="/privacy" target="_blank" rel="noopener" data-privacy-link className="underline underline-offset-2 hover:text-ink-soft">
-            隐私政策与使用条款
-          </a>
-        </p>
-      </form>
+            ) : null}
+            <p className="mt-4 text-center text-xs text-ink-faint">
+              {config.registration ? "登录或注册即表示同意" : "登录即表示同意"}
+              <a href="/privacy" target="_blank" rel="noopener" data-privacy-link className="underline underline-offset-2 hover:text-ink-soft">
+                隐私政策与使用条款
+              </a>
+            </p>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }

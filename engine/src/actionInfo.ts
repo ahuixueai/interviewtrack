@@ -17,13 +17,34 @@ export interface Credential {
   value: string;
 }
 
+/**
+ * 链接是干什么的。一封笔试通知里常常有好几个链接（牛客一封信就有五个），
+ * 只有一个是真正的考试入口，其余是「确认参加」、模拟练习、浏览器下载……
+ *
+ * - entry：去做这件事的入口（考试地址、面试会议、测评链接）
+ * - confirm：要你先点一下确认参加 / 回复时间
+ * - practice：模拟考试、练习题、设备调试
+ * - info：须知、帮助帖、下载地址
+ * - other：看不出是什么
+ */
+export type LinkKind = "entry" | "confirm" | "practice" | "info" | "other";
+
+export interface LinkDetail {
+  url: string;
+  kind: LinkKind;
+  /** 信里对它的叫法（链接前面那句话），如「考试地址」「确认是否参加考试」。看不出就是 null。 */
+  label: string | null;
+}
+
 export interface ActionInfo {
   /** 入口链接，最像「去做这件事」的排在最前。不含退订、隐私政策这类页脚链接。 */
   links: readonly string[];
+  /** 和 links 同序，每个链接是干什么的、信里怎么叫它。 */
+  linkDetails: readonly LinkDetail[];
   credentials: readonly Credential[];
 }
 
-export const EMPTY_ACTION_INFO: ActionInfo = { links: [], credentials: [] };
+export const EMPTY_ACTION_INFO: ActionInfo = { links: [], linkDetails: [], credentials: [] };
 
 const MAX_LINKS = 5;
 const MAX_CREDENTIALS = 4;
@@ -34,31 +55,114 @@ const URL_PATTERN = /https?:\/\/[^\s<>"'`，。；、！？（）【】「」《
 /** 页脚链接：与「做这件事」无关，放进详情只会让人点错。 */
 const FOOTER_LINK = /unsubscribe|退订|privacy|隐私|terms|条款|preferences|help|faq|support/i;
 
-/** 链接前面出现这些词，说明它是入口。 */
+/** 链接前面出现这些词，说明它是入口（弱提示：「点击」「链接」也算）。 */
 const ENTRY_CUE =
   /测评|笔试|考试|面试|作答|入口|登录|链接|点击|会议|assessment|test|exam|interview|join|start|begin|launch|link|click/i;
 
-function trimUrl(raw: string): string {
-  // 句末的半角标点属于句子，不属于链接
-  return raw.replace(/[.,;:!?)\]}>]+$/, "");
+/** 强提示：明确说了这是考试 / 面试 / 会议的地址。 */
+const STRONG_ENTRY =
+  /(考试|笔试|面试|测评|作答|答题|会议)(地址|入口|链接|网址)|(进入|开始|参加)(考试|笔试|面试|测评|作答|会议)|(interview|meeting|assessment|test|exam)\s*(link|url)|join\s+(the\s+)?(meeting|interview|call)/i;
+
+/** 要你先确认参加、回复时间的链接。 */
+const CONFIRM_CUE = /确认是否参加|确认参加|是否参加|确认出席|回复确认|接受邀请|确认时间|选择时间|预约时间|confirm|rsvp|accept|schedule\s+a\s+time/i;
+
+/** 模拟、练习、调试：考前可以点，但不是考试本身。 */
+const PRACTICE_CUE = /模拟|练习|调试|试做|样题|题库|设备检测|环境检测|practice|mock|sample|demo|trial|system\s*check/i;
+const PRACTICE_URL = /acm_oj_test|\/exam\/oj\b|practice|mock|demo/i;
+
+/** 须知、帮助、下载：说明性质。 */
+const INFO_CUE =
+  /下载|须知|说明|常见问题|帮助|指南|教程|攻略|官网|介绍|download|guide|instructions|learn\s+more|find\s+out\s+more|more\s+information|information\s+(?:on|about)|accommodation|disability/i;
+const INFO_URL = /\/discuss\/|download/i;
+
+const KIND_RANK: Readonly<Record<LinkKind, number>> = { entry: 0, confirm: 1, practice: 2, info: 3, other: 4 };
+
+export function linkKindRank(kind: LinkKind): number {
+  return KIND_RANK[kind];
 }
 
-export function extractLinks(text: string): string[] {
+function trimUrl(raw: string): string {
+  // 句末的半角标点属于句子，不属于链接；末尾光秃秃的 # 也不要（牛客的链接都带一个，打开是同一页）
+  return raw.replace(/[.,;:!?)\]}>]+$/, "").replace(/#$/, "");
+}
+
+/** 链接前面的那句话：同一行里链接前的最后一个分句；链接独占一行就看上一行。 */
+function clauseBefore(source: string, index: number): string {
+  const lineStart = source.lastIndexOf("\n", index - 1) + 1;
+  let before = source.slice(lineStart, index);
+  if (before.replace(/[\s（(【\[：:]+/g, "").length === 0) {
+    // 链接独占一行：取上一个非空行
+    const lines = source.slice(0, lineStart).split("\n").map((l) => l.trim()).filter(Boolean);
+    before = lines.at(-1) ?? "";
+  }
+  const clauses = before
+    .split(/[，,。；;：:！!？?（(【\[]/)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  // 判断用途要看整句（「You can find more information on … here」前半句才是关键），标签太长会在 labelOf 里丢掉
+  return (clauses.at(-1) ?? "").slice(-100);
+}
+
+const LABEL_PREFIX = /^(请您?|您可|可以|建议(你|您)?(提前)?(进行|在)?|点击|进入|访问|打开|前往|通过)+/;
+
+/** 分句整理成标签。太长、看着像网址、什么都没剩，就不当标签。 */
+function labelOf(clause: string): string | null {
+  const label = clause.replace(LABEL_PREFIX, "").replace(/^(?:please\s+)?(?:visit|click(?:\s+here)?|go\s+to|see|use)\b\s*/i, "").replace(/[\s*·•\-—>»]+$/, "").trim();
+  if (label.length < 2 || /[./]\w/.test(label)) return null;
+  const cjk = /[\u4e00-\u9fff]/.test(label);
+  if (label.length > (cjk ? 16 : 32)) return null;
+  return label;
+}
+
+function kindOf(clause: string, url: string): LinkKind {
+  if (CONFIRM_CUE.test(clause)) return "confirm";
+  if (PRACTICE_CUE.test(clause)) return "practice";
+  if (STRONG_ENTRY.test(clause)) return "entry";
+  if (INFO_CUE.test(clause)) return "info";
+  if (PRACTICE_URL.test(url)) return "practice";
+  if (INFO_URL.test(url)) return "info";
+  if (ENTRY_CUE.test(clause)) return "entry";
+  return "other";
+}
+
+/** 跟踪链接（awstrack、sendgrid…）把真正的网址编码在自己里面。解码后包含一个已经列过的网址，就是它的副本。 */
+function wrapsSeen(url: string, seen: ReadonlySet<string>): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(url);
+  } catch {
+    return false;
+  }
+  if (decoded === url && !/https?:\/\/.*https?:\/\//.test(url)) return false;
+  for (const earlier of seen) {
+    const bare = earlier.replace(/^https?:\/\//, "");
+    if (bare.length >= 12 && decoded.includes(bare) && !earlier.includes(decoded)) return true;
+  }
+  return false;
+}
+
+export function extractLinkDetails(text: string): LinkDetail[] {
   const source = text ?? "";
-  const found: { url: string; cued: boolean; order: number }[] = [];
+  const found: (LinkDetail & { order: number })[] = [];
   const seen = new Set<string>();
   let order = 0;
   for (const match of source.matchAll(URL_PATTERN)) {
     const url = trimUrl(match[0]);
     if (url.length < 12 || seen.has(url) || FOOTER_LINK.test(url)) continue;
+    // 纯文本版邮件常写成「网址（跟踪链接）」：跟踪链接里包着前面那个网址，同一个地方不列两次
+    if (wrapsSeen(url, seen)) continue;
     seen.add(url);
-    const before = source.slice(Math.max(0, (match.index ?? 0) - 30), match.index ?? 0);
-    found.push({ url, cued: ENTRY_CUE.test(before), order });
+    const clause = clauseBefore(source, match.index ?? 0);
+    found.push({ url, kind: kindOf(clause, url), label: labelOf(clause), order });
     order += 1;
   }
-  // 有入口提示词的排前面，其余保持原文顺序
-  found.sort((a, b) => Number(b.cued) - Number(a.cued) || a.order - b.order);
-  return found.slice(0, MAX_LINKS).map((f) => f.url);
+  // 入口在前，然后是确认、练习、须知，看不出的最后；同类保持原文顺序
+  found.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || a.order - b.order);
+  return found.slice(0, MAX_LINKS).map(({ url, kind, label }) => ({ url, kind, label }));
+}
+
+export function extractLinks(text: string): string[] {
+  return extractLinkDetails(text).map((d) => d.url);
 }
 
 /**
@@ -107,5 +211,6 @@ export function extractCredentials(text: string): Credential[] {
 }
 
 export function extractActionInfo(text: string): ActionInfo {
-  return { links: extractLinks(text), credentials: extractCredentials(text) };
+  const linkDetails = extractLinkDetails(text);
+  return { links: linkDetails.map((d) => d.url), linkDetails, credentials: extractCredentials(text) };
 }

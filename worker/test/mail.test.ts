@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  admit,
-  confirmationCode,
-  htmlToText,
-  parseAllowList,
-  pickBody,
-  sentAtUtc,
-  stripForwardPrefix,
-  unwrapManualForward,
-} from "../src/mail.js";
+import { admit, confirmationCode, htmlToText, parseAllowList, pickBody, sentAtUtc, stripForwardPrefix, unwrapManualForward, admissionEvidence } from "../src/mail.js";
 
 const ME = "me@gmail.example";
 const allow = [ME];
@@ -193,5 +184,46 @@ describe("时间与验证码", () => {
     expect(confirmationCode("Confirmation code: 123456789")).toBe("123456789");
     expect(confirmationCode("确认码：987654321")).toBe("987654321");
     expect(confirmationCode("没有码")).toBeNull();
+  });
+});
+
+/**
+ * 这封信凭什么被接收（2026-11-16，只记录、不拦截）。
+ *
+ * 先记一段时间：Gmail / QQ / 网易的转发信，信封长什么样、认证结果是什么，
+ * 再据此收紧收信规则。只记规则名、信封的形状和 pass / fail，不记任何地址和内容。
+ */
+describe("凭什么被接收：只记形状，不记地址", () => {
+  const allow = ["me@gmail.example"];
+  const CF_PASS = { key: "ARC-Authentication-Results", value: "i=1; mx.cloudflare.net; dkim=pass header.d=xinghe.example header.s=s1; dmarc=pass header.from=xinghe.example policy.dmarc=reject; spf=pass (mx.cloudflare.net: domain of me+caf_=jobs=my.example@gmail.example designates 1.2.3.4 as permitted sender)" };
+
+  it("Gmail 自动转发：靠 X-Forwarded-For 认出，信封是 Gmail 自己生成的 +caf_= 格式，认证都通过", () => {
+    const e = admissionEvidence("me+caf_=jobs=my.example@gmail.example", "HR <hr@xinghe.example>", [{ key: "X-Forwarded-For", value: "me@gmail.example jobs@my.example" }, CF_PASS], allow);
+    expect(e).toBe("xff|env:caf|auth:cf|spf:pass|dkim:pass|dmarc:pass");
+  });
+
+  it("手动转发：发件人和信封都是你自己", () => {
+    expect(admissionEvidence("me@gmail.example", "Me <me@gmail.example>", [], allow)).toBe("from|env:allowed|auth:none|spf:-|dkim:-|dmarc:-");
+  });
+
+  it("只有 From 写的是你、信封是别人的：记成 env:other", () => {
+    expect(admissionEvidence("x@evil.example", "Me <me@gmail.example>", [], allow)).toBe("from|env:other|auth:none|spf:-|dkim:-|dmarc:-");
+  });
+
+  it("QQ / 网易的带标记信封；Resent-From", () => {
+    expect(admissionEvidence("10001+auto_=u-k3x9q2m7pz=interviewtrack.me@qq.com", "HR <noreply@hr.example>", [], ["10001@qq.com"])).toBe("tagged|env:tagged|auth:none|spf:-|dkim:-|dmarc:-");
+    expect(admissionEvidence("bounce@x.example", "HR <noreply@hr.example>", [{ key: "Resent-From", value: "alice2026@163.com" }], ["alice2026@163.com"])).toBe("resent|env:other|auth:none|spf:-|dkim:-|dmarc:-");
+  });
+
+  it("认证结果不是 Cloudflare 写的（信里自带的、发信人可以伪造）：标成 auth:other", () => {
+    const e = admissionEvidence("x@evil.example", "Me <me@gmail.example>", [{ key: "Authentication-Results", value: "mx.evil.example; spf=pass; dkim=pass; dmarc=fail" }], allow);
+    expect(e).toBe("from|env:other|auth:other|spf:pass|dkim:pass|dmarc:fail");
+  });
+
+  it("没被接收的信没有这条记录；记录里不出现任何地址", () => {
+    expect(admissionEvidence("spam@x.example", "Spam <spam@x.example>", [], allow)).toBeNull();
+    const e = admissionEvidence("me+caf_=jobs=my.example@gmail.example", "HR <hr@xinghe.example>", [{ key: "X-Forwarded-For", value: "me@gmail.example jobs@my.example" }, CF_PASS], allow) ?? "";
+    expect(e).not.toContain("@");
+    expect(e).not.toContain("example");
   });
 });

@@ -62,6 +62,11 @@ export interface Env {
   MAX_USERS?: string;
   /** 每人每天最多调用几次 AI（摘信息 + 一句话添加 + 面试准备）。默认 100；作者账号不限。 */
   AI_DAILY_LIMIT?: string;
+  /**
+   * Cloudflare 给你的每日发信上限（验证码 + 邮件提醒 + 监控提醒合计）。Cloudflare 不公开固定数字，
+   * 按账号情况调整，在 Cloudflare 后台 Email Service 里看。填了之后，用到 80% 会给你发监控提醒；不填就不查。
+   */
+  SEND_DAILY_LIMIT?: string;
   /** 登录验证码从这个地址发出（域名要在 Cloudflare Email Service 里开通）。 */
   LOGIN_FROM?: string;
   /** Cloudflare Turnstile（防机器人）：公开的站点密钥写在 wrangler.toml，私密的用 `wrangler secret put TURNSTILE_SECRET`。 */

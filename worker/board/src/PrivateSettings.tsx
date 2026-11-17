@@ -58,7 +58,7 @@ const linkButton =
   "inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-85";
 
 /** 日历与提醒：邮件提醒开关 + 一键订阅 + 提前多久提醒。 */
-function CalendarSettings() {
+function CalendarSettings({ onSaved }: { onSaved: (calendar: BoardPrefs["calendar"]) => void }) {
   const { session } = useSession();
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +107,11 @@ function CalendarSettings() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ calendar }),
     }).then(
-      (res) => setSaveState(res.ok ? "saved" : "failed"),
+      (res) => {
+        setSaveState(res.ok ? "saved" : "failed");
+        // 卡片上「前一晚 8 点会发邮件提醒你」跟着开关走
+        if (res.ok) onSaved(calendar);
+      },
       () => setSaveState("failed"),
     );
   };
@@ -195,7 +199,7 @@ function CalendarSettings() {
         {prefs ? (
           <div className="flex flex-wrap gap-x-6 gap-y-3" data-alarm-prefs>
             <label className="block text-sm text-ink-soft">
-              面试、笔试（准点开始）
+              面试、笔试（按时开始）
               <select
                 name="fixedAlarm"
                 value={String(prefs.calendar.fixedAlarm)}
@@ -247,6 +251,7 @@ function InboxSettings({
   modelFailed,
   busy,
   onRetryModel,
+  onReparseAll,
 }: {
   emailCount: number;
   lastStoredAt: string | null;
@@ -255,6 +260,7 @@ function InboxSettings({
   modelFailed: number;
   busy: boolean;
   onRetryModel: () => void;
+  onReparseAll: () => void;
 }) {
   const { session } = useSession();
   const sender = senderText(session.forwarders);
@@ -303,6 +309,25 @@ function InboxSettings({
       </Section>
 
       {session.role === "owner" ? <MonitorSection /> : null}
+
+      {session.role === "owner" ? (
+        <Section title="按最新规则重新整理" hint="只有作者账号看得到。">
+          <div className="flex flex-wrap items-center gap-2" data-reparse-all>
+            <p className="text-xs leading-relaxed text-ink-soft">
+              改了解析规则、上线之后点一下：所有账号已经收到的信按新规则重判（用收信时 AI 摘下的那份回放，不再调用 AI，不花钱）。
+            </p>
+            <button
+              type="button"
+              onClick={onReparseAll}
+              disabled={busy}
+              data-action="reparse-all"
+              className="rounded-lg border border-hairline px-3 py-1.5 text-sm text-ink-soft hover:bg-raised disabled:opacity-50"
+            >
+              {busy ? "处理中…" : "按最新规则重新整理"}
+            </button>
+          </div>
+        </Section>
+      ) : null}
 
       <Section title="测一下收信通不通">
         <p className="text-xs leading-relaxed text-ink-soft" data-test-mail>
@@ -624,6 +649,8 @@ export function privateSettings(props: {
   modelFailed: number;
   reparseBusy: boolean;
   onRetryModel: () => void;
+  onReparseAll: () => void;
+  onCalendarSaved: (calendar: BoardPrefs["calendar"]) => void;
 }): { groups: SettingsGroup[]; account: React.ReactNode } {
   return {
     groups: [
@@ -632,7 +659,7 @@ export function privateSettings(props: {
         title: "时区",
         content: <TimeZoneSettings zones={props.zones} deviceZone={props.deviceZone} onSave={props.onSaveZones} reparse={props.reparse} />,
       },
-      { id: "calendar", title: "日历与提醒", content: <CalendarSettings /> },
+      { id: "calendar", title: "日历与提醒", content: <CalendarSettings onSaved={props.onCalendarSaved} /> },
       {
         id: "inbox",
         title: "收信",
@@ -645,6 +672,7 @@ export function privateSettings(props: {
             modelFailed={props.modelFailed}
             busy={props.reparseBusy}
             onRetryModel={props.onRetryModel}
+            onReparseAll={props.onReparseAll}
           />
         ),
       },

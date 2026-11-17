@@ -27,7 +27,7 @@ INBOX_DOMAIN = "example.com"
 # 开放注册：新邮箱验证后自动建账号。要停止新注册，改成 "closed" 再部署（已有账号照常用）。
 REGISTRATION = "open"
 # 最多多少个账号（含作者）。满了新邮箱会看到「内测名额已满」。
-MAX_USERS = "50"
+MAX_USERS = "100"
 # 每人每天最多调用几次 AI（收信摘信息、一句话添加、面试准备各算一次）；用完当天只用规则。作者不限。
 AI_DAILY_LIMIT = "100"
 # 验证码从这个地址发出（你的域名要开着 Email Routing）。

@@ -1,5 +1,7 @@
+import { maxUsers, userCount } from "./accounts.js";
 import { systemSender } from "./inbox.js";
 import { MODEL_FAILED_PREFIX } from "./reparse.js";
+import { bump, sendsToday } from "./stats.js";
 import type { Env } from "./types.js";
 
 /**
@@ -11,6 +13,8 @@ import type { Env } from "./types.js";
  * 1. AI 解析失败多（所有人合计）：过去 24 小时解析过的信里，模型失败 ≥ 2 封且占 ≥ 30%
  * 2. 收信断了（只看作者自己的）：最近一封进库已经超过 3 天（求职季里这么久一封都没有，多半是 Gmail 转发断了）
  * 3. 处理出错：过去 24 小时有信整封处理失败（status = error）
+ * 4. 名额快满：账号数到了 MAX_USERS 的 80%（10/20 加）
+ * 5. 发信快到上限：今天发的信（验证码 + 邮件提醒 + 监控提醒）到了 SEND_DAILY_LIMIT 的 80%；没填上限就不查（10/20 加）
  *
  * 同一个问题 24 小时内只提醒一次（记在 settings 的 monitor 里），免得每 6 小时轰炸一次。
  */
@@ -20,10 +24,12 @@ export const MIN_MODEL_FAILURES = 2;
 export const MODEL_FAILURE_RATE = 0.3;
 export const QUIET_DAYS = 3;
 export const REPEAT_HOURS = 24;
+/** 名额、发信量用到多少开始提醒。 */
+export const NEAR_LIMIT = 0.8;
 
 export interface Problem {
   /** 去重用：同一类问题 24 小时内只提醒一次。 */
-  key: "model" | "quiet" | "error";
+  key: "model" | "quiet" | "error" | "seats" | "sends";
   text: string;
 }
 
@@ -86,6 +92,24 @@ export async function findProblems(env: Env, nowMs: number): Promise<Problem[]> 
       });
     }
   }
+  const seats = maxUsers(env);
+  const users = await userCount(env);
+  if (users >= Math.ceil(seats * NEAR_LIMIT)) {
+    problems.push({
+      key: "seats",
+      text: `账号已经有 ${users} 个，名额上限 ${seats} 个。满了之后新邮箱会看到「内测名额已满」。处理：要放更多人，改 wrangler.toml 里的 MAX_USERS 再部署。`,
+    });
+  }
+  const limit = Number(env.SEND_DAILY_LIMIT);
+  if (Number.isFinite(limit) && limit > 0) {
+    const sent = await sendsToday(env, nowMs);
+    if (sent >= Math.ceil(limit * NEAR_LIMIT)) {
+      problems.push({
+        key: "sends",
+        text: `今天（UTC）已经发了 ${sent} 封信（验证码 + 邮件提醒 + 监控提醒），每日上限 ${limit} 封。超了之后验证码发不出去，新用户登录不了。处理：去 Cloudflare 后台 Email Service 申请提高上限。`,
+      });
+    }
+  }
   return problems;
 }
 
@@ -118,6 +142,7 @@ export async function sendAlert(env: Env, subject: string, lines: readonly strin
     subject,
     text: [...lines, "", "（这封信由看板每 6 小时一次的自动检查发出；同一个问题 24 小时内只提醒一次。）"].join("\n"),
   });
+  await bump(env, Date.now(), "", "alert_mail");
   return true;
 }
 
@@ -137,7 +162,7 @@ export async function runMonitor(env: Env, nowMs: number): Promise<MonitorResult
     return last === undefined || nowMs - Date.parse(last) >= REPEAT_HOURS * 3_600_000;
   });
   if (due.length === 0) return { problems, alerted: [] };
-  const subject = `准点提醒：${due.map((p) => ({ model: "AI 解析失败多", error: "有信处理出错", quiet: "很久没收到新邮件" })[p.key]).join("、")}`;
+  const subject = `准点提醒：${due.map((p) => ({ model: "AI 解析失败多", error: "有信处理出错", quiet: "很久没收到新邮件", seats: "名额快满了", sends: "发信快到上限" })[p.key]).join("、")}`;
   const ok = await sendAlert(env, subject, due.map((p, i) => `${i + 1}. ${p.text}`));
   if (!ok) return { problems, alerted: [] };
   const stamp = new Date(nowMs).toISOString();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractActionInfo, extractCredentials, extractLinks } from "../src/actionInfo.js";
+import { extractActionInfo, extractCredentials, extractLinkDetails, extractLinks } from "../src/actionInfo.js";
 
 // 全部是合成文本，域名用保留的 .example
 describe("extractLinks", () => {
@@ -44,6 +44,69 @@ describe("extractLinks", () => {
   it("没有链接返回空", () => {
     expect(extractLinks("请留意后续通知")).toEqual([]);
     expect(extractLinks("")).toEqual([]);
+  });
+});
+
+// 合成样本：照着牛客笔试通知的通用结构写的，公司、链接 ID 都是编的
+const NOWCODER_STYLE = [
+  "现诚邀您参加在线笔试，请仔细阅读以下考试须知，按时参加笔试。",
+  "",
+  "点击确认是否参加考试（https://hr.nowcoder.com/v1/s/Cnf1rmAb#）",
+  "",
+  "考试时间：(北京时间，UTC+08:00)  2026-11-05 19:00:00 -- 21:00:00",
+  "",
+  "考试地址： https://hr.nowcoder.com/v1/s/Ex4mLink# （考试地址为您的私人专属地址，请勿转发。）",
+  "",
+  "请使用最新版Chrome浏览器访问笔试网址，最新版浏览器下载地址： https://www.nowcoder.com/discuss/3793",
+  "",
+  "在线作答编程，需要自己处理输入输出，建议你进行在线oj输入输出练习（https://www.nowcoder.com/link/acm_oj_test#question）",
+  "。",
+  "为提前熟悉考试环境，建议提前在题库模拟练习：进入考前模拟题库（https://www.nowcoder.com/exam/oj?page=1&topicId=389） 。",
+  "",
+  "www.nowcoder.com（http://www.nowcoder.com）",
+].join("\n");
+
+describe("extractLinkDetails：一封信好几个链接", () => {
+  it("牛客笔试通知：考试地址排第一，确认参加第二，练习和下载往后放", () => {
+    expect(extractLinkDetails(NOWCODER_STYLE)).toEqual([
+      { url: "https://hr.nowcoder.com/v1/s/Ex4mLink", kind: "entry", label: "考试地址" },
+      { url: "https://hr.nowcoder.com/v1/s/Cnf1rmAb", kind: "confirm", label: "确认是否参加考试" },
+      { url: "https://www.nowcoder.com/link/acm_oj_test#question", kind: "practice", label: "在线oj输入输出练习" },
+      { url: "https://www.nowcoder.com/exam/oj?page=1&topicId=389", kind: "practice", label: "考前模拟题库" },
+      { url: "https://www.nowcoder.com/discuss/3793", kind: "info", label: "最新版浏览器下载地址" },
+    ]);
+  });
+
+  it("链接独占一行时，看上一行怎么叫它", () => {
+    expect(extractLinkDetails("面试会议链接：\nhttps://meet.example/j/abc123")).toEqual([
+      { url: "https://meet.example/j/abc123", kind: "entry", label: "面试会议链接" },
+    ]);
+  });
+
+  it("模拟考试链接是练习，不是入口", () => {
+    const text = "模拟考试链接：https://exam.example/mock/1\n正式考试链接：https://exam.example/s/2";
+    expect(extractLinkDetails(text).map((d) => [d.kind, d.label])).toEqual([
+      ["entry", "正式考试链接"],
+      ["practice", "模拟考试链接"],
+    ]);
+  });
+
+  it("只剩末尾的 # 去掉，真正的 #片段保留", () => {
+    expect(extractLinks("考试地址：https://exam.example/s/abc#")).toEqual(["https://exam.example/s/abc"]);
+    expect(extractLinks("练习：https://exam.example/p#q1")).toEqual(["https://exam.example/p#q1"]);
+  });
+
+  it("英文信也能分", () => {
+    const text = "Please confirm your attendance: https://ats.example/rsvp/9\nJoin the interview: https://zoom.example/j/123456";
+    expect(extractLinkDetails(text).map((d) => [d.kind, d.label])).toEqual([
+      ["entry", "Join the interview"],
+      ["confirm", "Please confirm your attendance"],
+    ]);
+  });
+
+  it("links 和 linkDetails 同序", () => {
+    const info = extractActionInfo(NOWCODER_STYLE);
+    expect(info.links).toEqual(info.linkDetails.map((d) => d.url));
   });
 });
 
@@ -100,11 +163,12 @@ describe("extractActionInfo", () => {
     ].join("\n");
     expect(extractActionInfo(text)).toEqual({
       links: ["https://assess.beichen.example/a/7f3k2"],
+      linkDetails: [{ url: "https://assess.beichen.example/a/7f3k2", kind: "entry", label: "测评链接" }],
       credentials: [{ label: "测评密钥", value: "BC-7Q2M-91XK" }],
     });
   });
 
-  it("什么都没有时是两个空数组", () => {
-    expect(extractActionInfo("我们已收到你的申请")).toEqual({ links: [], credentials: [] });
+  it("什么都没有时是空数组", () => {
+    expect(extractActionInfo("我们已收到你的申请")).toEqual({ links: [], linkDetails: [], credentials: [] });
   });
 });

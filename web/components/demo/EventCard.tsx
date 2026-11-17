@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
-import { DESTINATION_LABEL, DUE_LABEL, timeSummary } from "@/lib/demo/parseDemo";
+import { DESTINATION_LABEL, DUE_LABEL, isLateNight, linkDetailsOf, linkLabel, sourceTimeLine, splitLinks, timeSummary } from "@/lib/demo/parseDemo";
 import type { DemoResult } from "@/lib/demo/parseDemo";
+
+/**
+ * 卡片要知道的看板设置。eveReminder：开着「前一晚 8 点邮件提醒」（只有私人看板会开；演示站不发邮件）。
+ */
+export const CardHints = createContext<{ eveReminder: boolean }>({ eveReminder: false });
 
 /**
  * 日程卡。只放三样：**公司、岗位、时间**，外加一个说明是什么事的标签。
@@ -41,6 +46,10 @@ export function EventCard({
 }) {
   const company = result.displayCompany.length > 0 ? result.displayCompany : "公司未认出";
   const time = timeSummary(result, viewerTimeZone);
+  const { eveReminder } = useContext(CardHints);
+  const sourceLine = sourceTimeLine(result);
+  // 凌晨的场次最容易睡过：做完了就不用再提醒
+  const lateNight = !done && isLateNight(result);
   return (
     <div
       className={`flex flex-col rounded-xl border border-hairline p-4 ${done ? "bg-raised" : "bg-surface"}`}
@@ -76,10 +85,25 @@ export function EventCard({
       <p className="mt-3 text-lg leading-snug font-semibold break-words text-ink">{company}</p>
       <p className="mt-0.5 text-sm break-words text-ink-soft">{result.role ?? "岗位未写明"}</p>
 
-      <p className="tabular mt-3 text-base font-semibold text-ink">
+      <p className="tabular mt-3 flex flex-wrap items-center gap-x-2 text-base font-semibold text-ink">
         {time.text}
-        {time.zone ? <span className="ml-2 text-xs font-normal text-ink-faint">{time.zone}</span> : null}
+        {time.zone ? <span className="text-xs font-normal text-ink-faint">{time.zone}</span> : null}
+        {lateNight ? (
+          <span className="rounded-md bg-accent px-1.5 py-0.5 text-xs font-semibold text-on-accent" data-late-night>
+            凌晨
+          </span>
+        ) : null}
       </p>
+      {sourceLine ? (
+        <p className="tabular text-xs text-ink-faint" data-source-time>
+          {sourceLine}
+        </p>
+      ) : null}
+      {lateNight && eveReminder && !pending ? (
+        <p className="mt-0.5 text-xs text-ink-soft" data-eve-hint>
+          前一晚 8 点会发邮件提醒你
+        </p>
+      ) : null}
 
       {note ? <p className="mt-1 text-xs leading-relaxed text-ink-faint">{note}</p> : null}
 
@@ -106,23 +130,24 @@ export function EventCard({
  * 都是规则从邮件原文逐字摘出的（详情里有完整列表和来历），这里最多各放两个，卡片不至于变长。
  */
 function AccessStrip({ result }: { result: DemoResult }) {
-  const links = result.links.slice(0, 2);
+  // 只放入口和「确认参加」；练习题、浏览器下载这类在详情里
+  const links = splitLinks(linkDetailsOf(result)).main.slice(0, 2);
   const credentials = result.credentials.slice(0, 2);
   if (links.length === 0 && credentials.length === 0) return null;
   return (
     <div className="mt-3 space-y-1.5" data-card-access>
-      {links.map((link, i) => (
+      {links.map((link) => (
         <a
-          key={link}
-          href={link}
+          key={link.url}
+          href={link.url}
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-1.5 text-sm font-medium text-on-brand-soft underline underline-offset-2"
-          title={link}
+          title={link.url}
         >
-          <ExternalLink size={14} aria-hidden />
-          {i === 0 ? "打开入口链接" : "其他链接"}
-          <span className="min-w-0 truncate text-xs font-normal text-ink-faint no-underline">{hostOf(link)}</span>
+          <ExternalLink size={14} aria-hidden className="shrink-0" />
+          <span className="shrink-0">{link.label === null && link.kind === "entry" ? "打开入口链接" : linkLabel(link)}</span>
+          <span className="min-w-0 truncate text-xs font-normal text-ink-faint no-underline">{hostOf(link.url)}</span>
         </a>
       ))}
       {credentials.map((credential) => (
@@ -156,7 +181,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center gap-2 text-sm">
       <span className="shrink-0 text-xs text-ink-faint">{label}</span>
       <code className="min-w-0 truncate font-mono text-[13px] text-ink select-all">{value}</code>
-      <button type="button" onClick={copy} aria-label={`复制${label}`} className="shrink-0 rounded-lg p-1 text-ink-soft hover:bg-raised">
+      <button type="button" onClick={copy} aria-label={`复制${label}`} className="-m-1.5 shrink-0 rounded-lg p-2.5 text-ink-soft hover:bg-raised md:m-0 md:p-1">
         {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
       </button>
     </div>
@@ -206,7 +231,7 @@ export function ActionButton({
       onClick={onClick}
       aria-label={label}
       data-action={action}
-      className={`rounded-lg px-3 py-1 text-xs ${style}`}
+      className={`inline-flex min-h-10 items-center justify-center rounded-lg px-3.5 py-2 text-sm md:min-h-0 md:px-3 md:py-1 md:text-xs ${style}`}
     >
       {children}
     </button>
@@ -261,7 +286,7 @@ export function DetailButton({ onClick, label }: { onClick: () => void; label: s
       onClick={onClick}
       aria-label={label}
       data-detail-button
-      className="rounded-lg border border-hairline px-3 py-1 text-xs font-medium text-ink-soft hover:bg-raised hover:text-ink"
+      className="inline-flex min-h-10 items-center justify-center rounded-lg px-3.5 py-2 text-sm md:min-h-0 md:px-3 md:py-1 md:text-xs border border-hairline font-medium text-ink-soft hover:bg-raised hover:text-ink"
     >
       详情
     </button>

@@ -2,13 +2,16 @@ import PostalMime from "postal-mime";
 import type { Address, Email } from "postal-mime";
 import { handleApi } from "./api.js";
 import { handleCalendar } from "./calendar.js";
-import { handleIncoming, MAX_ATTACHED_MESSAGES } from "./inbox.js";
+import { handleIncoming, MAX_ATTACHED_MESSAGES, recipientOf } from "./inbox.js";
 import type { IncomingMail } from "./inbox.js";
 import { runMonitor } from "./monitor.js";
 import { withSecurityHeaders } from "./security.js";
 import { pruneSecurityLogs } from "./privacy.js";
 import type { Env, ExecutionContext, ForwardableEmailMessage } from "./types.js";
 import { runReminders } from "./reminders.js";
+import { pruneStats, recordAdmission, recordHandling } from "./stats.js";
+import { admissionEvidence } from "./mail.js";
+import { effectiveForwarders } from "./accounts.js";
 
 /** 和 wrangler.toml 里那一条一字不差。 */
 const REMINDER_CRON = "*/15 * * * *";
@@ -54,16 +57,30 @@ async function attachedMessages(mail: Email): Promise<IncomingMail[]> {
  * 这里只做 MIME 拆信，其余全部在 inbox.ts（可测）。
  */
 export default {
-  async email(message: ForwardableEmailMessage, env: Env, _ctx: ExecutionContext): Promise<void> {
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
+    const nowMs = Date.now();
     const raw = await new Response(message.raw).arrayBuffer();
     const mail = await PostalMime.parse(raw);
     const handling = await handleIncoming(
       { ...toIncoming(mail, message.from, message.to), attached: await attachedMessages(mail) },
       env,
-      Date.now(),
+      nowMs,
       () => crypto.randomUUID(),
     );
     if (handling.kind === "rejected") message.setReject(handling.reason);
+    // 后台统计：只记次数（收到、收下、丢掉、拒收……），不记内容
+    ctx.waitUntil(
+      recipientOf(env, message.to, nowMs)
+        .catch(() => null)
+        .then(async (user) => {
+          await recordHandling(env, nowMs, user?.id ?? null, message.from, handling);
+          // 只记录、不拦截：被接收的信是凭什么被接收的（规则、信封形状、认证结果；不含地址和内容）
+          if (user && handling.kind !== "rejected") {
+            const headers = mail.headers.map((h) => ({ key: h.key, value: h.value }));
+            await recordAdmission(env, nowMs, user.id, admissionEvidence(message.from, formatAddress(mail.from), headers, effectiveForwarders(env, user)));
+          }
+        }),
+    );
     // 日志只记结论，不记邮件内容
     console.log(JSON.stringify({ handling }));
   },
@@ -85,6 +102,8 @@ export default {
     }
     // 顺带清掉过期的登录 IP 记录（隐私政策承诺 2 天删）
     ctx.waitUntil(pruneSecurityLogs(env, Date.now()).catch(() => undefined));
+    // 后台统计 90 天后删
+    ctx.waitUntil(pruneStats(env, Date.now()).catch(() => undefined));
     ctx.waitUntil(
       runMonitor(env, Date.now()).then(
         (r) => console.log(JSON.stringify({ monitor: { problems: r.problems.map((p) => p.key), alerted: r.alerted } })),

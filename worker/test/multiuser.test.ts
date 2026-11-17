@@ -248,10 +248,12 @@ describe("接口按人隔离", () => {
     const cookie = await login("amy@school.example");
     const list = (await (await call("/api/emails", { cookie })).json()) as { emails: unknown[] };
     expect(list.emails).toEqual([]);
-    expect(await (await call("/api/edits", { cookie })).json()).toEqual({ edits: null });
+    expect(await (await call("/api/edits", { cookie })).json()).toEqual({ edits: null, version: "" });
     await call("/api/emails/owner-mail", { method: "DELETE", cookie });
     expect(emails(me.id)).toHaveLength(1);
     expect((await call("/api/monitor", { cookie })).status).toBe(403);
+    // 「按最新规则重新整理所有人的信」也只有作者能点
+    expect((await call("/api/reparse", { body: { allUsers: true }, cookie })).status).toBe(403);
 
     // 删提醒也只能删自己的
     await e.DB.prepare("INSERT INTO notices (id, user_id, kind, received_at, subject, body) VALUES ('owner-n', ?, 'gmail-forwarding', 'x', 's', 'b')").bind(me.id).run();

@@ -1,6 +1,7 @@
 import { notParsedResult, toDemoResult } from "./parseDemo";
 import type { DemoResult } from "./parseDemo";
 import type { SampleEmail } from "./sampleEmails";
+import { decodeHtmlEntities } from "../tracker-core/index";
 import type { ParseOutcome } from "../tracker-core/index";
 
 /**
@@ -27,6 +28,8 @@ export interface LiveData {
   results: Map<string, DemoResult>;
   /** 邮件 id → 用了哪个模型（null = 只用了规则）。 */
   models: Map<string, string | null>;
+  /** 邮件 id → 收信时为什么没用上模型（「模型调用失败…」「你关掉了 AI…」）；用上了或没留原因是 null。 */
+  errors: Map<string, string | null>;
 }
 
 const VIA_LABEL: Readonly<Record<string, string>> = {
@@ -50,6 +53,7 @@ export function toLiveData(rows: readonly EmailRow[], viewerTimeZone: string): L
   const samples: SampleEmail[] = [];
   const results = new Map<string, DemoResult>();
   const models = new Map<string, string | null>();
+  const errors = new Map<string, string | null>();
   for (const row of ordered) {
     samples.push({
       id: row.id,
@@ -59,16 +63,18 @@ export function toLiveData(rows: readonly EmailRow[], viewerTimeZone: string): L
         id: row.id,
         from: row.from_addr,
         to: "",
-        subject: row.subject,
-        body: row.body,
+        // 早先存下的信里可能还留着 &ldquo; 这类实体：看原文时还原掉
+        subject: decodeHtmlEntities(row.subject),
+        body: decodeHtmlEntities(row.body),
         receivedAtUtc: row.received_at,
       },
       tokens: {},
     });
     results.set(row.id, resultOf(row, viewerTimeZone));
     models.set(row.id, row.model);
+    errors.set(row.id, row.error ?? null);
   }
-  return { samples, results, models };
+  return { samples, results, models, errors };
 }
 
 function resultOf(row: EmailRow, viewerTimeZone: string): DemoResult {

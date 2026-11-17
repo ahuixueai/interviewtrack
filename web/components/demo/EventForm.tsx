@@ -34,7 +34,7 @@ const COMMON_ZONES = [
 ] as const;
 
 const TIME_KINDS: readonly { id: TimeKind; label: string; hint: string }[] = [
-  { id: "fixed_start", label: "准点开始", hint: "到点必须在场，比如笔试开考、面试" },
+  { id: "fixed_start", label: "按时开始", hint: "到点必须在场，比如笔试开考、面试" },
   { id: "deadline", label: "截止前完成", hint: "在这之前随时做都行，比如测评" },
   { id: "none", label: "没有具体时间", hint: "信里没写，或者还没定" },
 ];
@@ -55,6 +55,7 @@ export function EventForm({
   showNote = false,
   renameFrom = null,
   quickParse,
+  focus = null,
   onSubmit,
   onCancel,
 }: {
@@ -72,6 +73,8 @@ export function EventForm({
   renameFrom?: string | null;
   /** 一句话添加：把原话交给 AI 认公司和岗位（只有私人看板、只在「添加」时有）。时间由规则从原话里算。 */
   quickParse?: (text: string) => Promise<{ model: QuickModelOutput; warning: string | null }>;
+  /** 打开时光标停在哪：缺时间就停在时间上，缺时区就停在时区上；默认第一个能填的格子。 */
+  focus?: "time" | "zone" | null;
   onSubmit: (value: EventFormValue) => void;
   onCancel: () => void;
 }) {
@@ -92,13 +95,24 @@ export function EventForm({
   const firstField = useRef<HTMLInputElement | HTMLSelectElement>(null);
   const id = useId();
 
+  const formRef = useRef<HTMLFormElement>(null);
+
   useEffect(() => {
-    firstField.current?.focus();
+    const root = formRef.current;
+    const target =
+      focus === "zone"
+        ? root?.querySelector<HTMLElement>('select[name="zone"]')
+        : focus === "time"
+          ? (root?.querySelector<HTMLElement>('input[name="when"]') ?? root?.querySelector<HTMLElement>('input[name="timeKind"]:checked'))
+          : null;
+    (target ?? firstField.current)?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // 只在打开时定一次焦点
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onCancel]);
 
   const recognize = async () => {
@@ -157,6 +171,7 @@ export function EventForm({
         className="absolute inset-0 cursor-default bg-(--jcc-overlay)"
       />
       <form
+        ref={formRef}
         onSubmit={submit}
         role="dialog"
         aria-modal="true"

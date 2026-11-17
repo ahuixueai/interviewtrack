@@ -15,6 +15,8 @@ export interface SessionData {
   extraForwarders: string[];
   maxExtraForwarders: number;
   ai: { enabled: boolean; usedToday: number; dailyLimit: number | null };
+  /** 要不要问「你是从哪知道准点的」（注册时没认出来源、还没答过）。 */
+  askSource: boolean;
 }
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : []);
@@ -36,6 +38,7 @@ export function parseSession(body: unknown): SessionData | null {
       usedToday: typeof ai.usedToday === "number" ? ai.usedToday : 0,
       dailyLimit: typeof ai.dailyLimit === "number" ? ai.dailyLimit : null,
     },
+    askSource: b.askSource === true,
   };
 }
 

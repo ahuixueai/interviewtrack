@@ -1,0 +1,43 @@
+{
+  "_说明": "渠道登记表（10/20）。看板（认短网址）、收信程序（认注册问题的答案）、本地后台（归类、显示中文名）共用这一份。新渠道：在 channels 里加一行；不加也能记，后台按标记原样显示、归到「其他」。以后想把视频单独成一类：在 categories 加 video，再把抖音、B站、视频号、video 的 category 改成 video，历史数据会自动重新归类。",
+  "categories": {
+    "social": "社交媒体",
+    "friend": "朋友推荐",
+    "community": "学校 / 求职社区",
+    "search": "搜索",
+    "other": "其他"
+  },
+  "channels": {
+    "xhs": { "name": "小红书", "category": "social" },
+    "douyin": { "name": "抖音", "category": "social" },
+    "bilibili": { "name": "B站", "category": "social" },
+    "zhihu": { "name": "知乎", "category": "social" },
+    "wxmp": { "name": "微信公众号", "category": "social" },
+    "wxch": { "name": "视频号", "category": "social" },
+    "video": { "name": "视频平台（自己选的）", "category": "social" },
+    "wechat": { "name": "微信群 / 朋友圈", "category": "friend" },
+    "qq": { "name": "QQ群", "category": "friend" },
+    "friend": { "name": "朋友推荐", "category": "friend" },
+    "invite": { "name": "邀请", "category": "friend" },
+    "nowcoder": { "name": "牛客", "category": "community" },
+    "1p3a": { "name": "一亩三分地", "category": "community" },
+    "campus": { "name": "学校 / 社团", "category": "community" },
+    "community": { "name": "学校或求职社区（自己选的）", "category": "community" },
+    "search": { "name": "搜索", "category": "search" },
+    "github": { "name": "GitHub", "category": "other" },
+    "v2ex": { "name": "V2EX", "category": "other" },
+    "jike": { "name": "即刻", "category": "other" },
+    "ph": { "name": "Product Hunt", "category": "other" },
+    "other": { "name": "其他（自己选的）", "category": "other" },
+    "direct": { "name": "直接访问", "category": "other" }
+  },
+  "answers": [
+    { "id": "xhs", "label": "小红书" },
+    { "id": "video", "label": "抖音 / B站等视频" },
+    { "id": "friend", "label": "朋友或群里推荐" },
+    { "id": "community", "label": "学校或求职社区" },
+    { "id": "search", "label": "搜索" },
+    { "id": "other", "label": "其他" }
+  ],
+  "searchDomains": ["google.", "baidu.", "bing.", "sogou.", "so.com", "sm.cn", "duckduckgo.", "yahoo.", "yandex."]
+}

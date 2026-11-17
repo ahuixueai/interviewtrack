@@ -99,6 +99,13 @@ openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET
 - 准点自己发的信（验证码、监控、提醒）被用户邮箱转回来，直接丢掉不存。
 - 上线：`npm run db:init`（只跑 0005）→ `npm run deploy`。注意发信额度：验证码和提醒共用。
 
+### 使用统计与来源（迁移 0006、0007）
+
+- 收信、发信、功能使用的每日次数记在 `daily_stats` 表，只有次数和时间，没有邮件内容，90 天后自动删。
+- 新用户从哪来：渠道登记在 `channels.json`。链接可以带 `?from=渠道&c=帖子名`，也可以用 `你的域名/渠道` 这样的短网址；都没认出来的新用户第一次进看板会被问一句「你是从哪知道准点的」（可跳过）。
+- 监控另有两条：账号到 `MAX_USERS` 的 80%、今天发信到 `SEND_DAILY_LIMIT` 的 80%（后者在 Cloudflare 后台 Email Service 里看到后填进 wrangler.toml；不填就不查）。
+- 看这些数的本地小工具不在这个仓库里；用 `wrangler d1 execute` 直接查表即可。
+
 ### 升级到第 2 期的步骤（在你的 Mac 上，按顺序）
 
 1. **先备份**（见下面「备份与恢复」的第一条 export）

@@ -4,7 +4,7 @@ import { toLiveData } from "../../web/lib/demo/liveData";
 import type { EmailRow } from "../../web/lib/demo/liveData";
 import { EMPTY_EDITS, parseEdits } from "../../web/lib/demo/userEdits";
 import { buildAgendaData } from "../../web/lib/demo/view";
-import { getUserSetting, loadPrefs } from "./store.js";
+import { getUserSetting, loadPrefs, MAX_EMAILS_LOADED } from "./store.js";
 import type { Env } from "./types.js";
 
 /**
@@ -14,7 +14,7 @@ import type { Env } from "./types.js";
 export async function loadAgenda(env: Env, userId: string): Promise<{ agenda: AgendaItem[]; prefs: BoardPrefs }> {
   const [rows, editsValue, prefs] = await Promise.all([
     env.DB.prepare(
-      "SELECT id, received_at, stored_at, via, from_addr, subject, body, status, outcome, model, error FROM emails WHERE user_id = ? ORDER BY received_at DESC LIMIT 1000",
+      `SELECT id, received_at, stored_at, via, from_addr, subject, body, status, outcome, model, error FROM emails WHERE user_id = ? ORDER BY received_at DESC LIMIT ${MAX_EMAILS_LOADED}`,
     )
       .bind(userId)
       .all<EmailRow>(),

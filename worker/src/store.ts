@@ -8,6 +8,13 @@ import type { Env } from "./types.js";
  */
 export type UserSettingKey = "edits" | "prefs" | "resume";
 
+/**
+ * 看板、日历订阅、邮件提醒一次最多读多少封信（最新的在前）。
+ * 11/16 量过（每封信都是一件独立的事，最坏情况）：350 封算一次日历约 90 毫秒，1000 封约 230 毫秒，够用，所以不做缓存——
+ * 缓存一旦没及时失效，日历上就是过时的面试时间。超过这个数时更早的信不参与，/api/emails 会把总数一起返回，看板写明。
+ */
+export const MAX_EMAILS_LOADED = 1000;
+
 export async function getUserSetting(env: Env, userId: string, key: UserSettingKey): Promise<string | null> {
   const row = await env.DB.prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = ?").bind(userId, key).first<{ value: string }>();
   return row?.value ?? null;
@@ -19,6 +26,16 @@ export async function putUserSetting(env: Env, userId: string, key: UserSettingK
   )
     .bind(userId, key, value, updatedAt)
     .run();
+}
+
+/**
+ * 一份设置的版本号：内容的指纹（SHA-256 前 16 位）；还没存过是空串。
+ * 用内容而不是保存时刻：两次保存落在同一毫秒也分得清，内容相同的重复保存不算改动。
+ */
+export async function versionOf(value: string | null): Promise<string> {
+  if (value === null) return "";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export async function deleteUserSetting(env: Env, userId: string, key: UserSettingKey): Promise<void> {

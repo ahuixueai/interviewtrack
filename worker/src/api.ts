@@ -1,9 +1,13 @@
+import { cleanSignup, saveSourceAnswer, shouldAskSource } from "./growth.js";
+import { sendSetupMail } from "./setupMail.js";
+import { bump, touchLastSeen } from "./stats.js";
 import {
   codeSender,
   devInsecure,
   effectiveForwarders,
   ensureOwner,
   inboxAddress,
+  inboxDomain,
   MAX_EXTRA_FORWARDERS,
   normalizeEmail,
   registrationOpen,
@@ -29,11 +33,12 @@ import {
 } from "./auth.js";
 import { parsePrefs } from "../../web/lib/demo/boardPrefs";
 import { aiDailyLimit, aiUsageToday } from "./ai.js";
-import { deleteUserSetting, getUserSetting, loadPrefs, putUserSetting } from "./store.js";
+import { derivedFromPassword } from "./calendar.js";
+import { deleteUserSetting, getUserSetting, loadPrefs, MAX_EMAILS_LOADED, putUserSetting, versionOf } from "./store.js";
 import { loadResume, prepare, resumeToStore } from "./prepare.js";
 import { quickAdd } from "./quickAdd.js";
 import { importEmail } from "./inbox.js";
-import { reparseBatch, retryModelBatch } from "./reparse.js";
+import { reparseAllBatch, reparseBatch, retryModelBatch } from "./reparse.js";
 import { findProblems, sendAlert } from "./monitor.js";
 import { DELETE_CONFIRM_TEXT, deleteUserData } from "./privacy.js";
 import type { Env } from "./types.js";
@@ -79,13 +84,14 @@ const fail = (status: number, message: string) => json({ error: message }, statu
  * - DELETE /api/emails/:id               → 彻底删除一封信（必须先在看板上删进回收站）
  * - GET  /api/notices                     → Gmail 转发验证信等提醒
  * - DELETE /api/notices/:id              → 转发确认做完了，删掉这条提醒
- * - GET  /api/edits / PUT /api/edits      → 你在看板上的手动操作
+ * - GET  /api/edits / PUT /api/edits      → 你在看板上的手动操作（带版本号；PUT 带 x-edits-base 时版本对不上回 409）
  * - GET/PUT /api/prefs                  → 看板偏好（日历提醒提前量…），和「你的修改」分开存
  * - GET/PUT/DELETE /api/resume          → 你的简历（只存文字）
  * - POST /api/prepare   {company,…,emails} → AI 面试准备：来信 + 简历 → 准备要点（不落库）
  * - POST /api/quick-add {text}            → 一句话添加：模型认出的公司、岗位、类型建议（时间由浏览器里的规则算）
  * - POST /api/reparse    {after}           → 按现在的规则重判已存的邮件（一批 10 封；改求职地后看板自己调）
  * - POST /api/reparse    {after, retryModel: true} → 收信时模型没响应的信，重新调用模型摘一遍（一批 3 封）
+ * - POST /api/reparse    {after, allUsers: true}   → 只有作者：引擎规则改了，所有人的信都按新规则重判（不调模型）
  * - POST /api/import     {from, subject, body, receivedAtUtc} → 导入一封旧邮件（scripts/import-gmail.mjs 用）
  */
 /** 测试里替换掉的外部依赖：Turnstile 校验、发验证码。生产用默认的。 */
@@ -161,7 +167,7 @@ export async function handleApi(request: Request, env: Env, nowMs: number, deps:
     const body = await readJson(request);
     const email = normalizeEmail(body?.email);
     if (email === null) return fail(400, "邮箱格式不对");
-    const result = await verifyCode(env, email, body?.code, nowMs);
+    const result = await verifyCode(env, email, body?.code, nowMs, cleanSignup(body?.source, inboxDomain(env)));
     if (result.kind === "ok") return signIn(result.user.id);
     await recordFailure();
     if (result.kind === "wrong") return fail(401, `验证码不对，还能试 ${result.attemptsLeft} 次`);
@@ -196,6 +202,8 @@ export async function handleApi(request: Request, env: Env, nowMs: number, deps:
 
   // 登录的是谁、收信地址、只收哪些邮箱转来的信、AI 开关与今天的用量（教程和设置页要用）
   if (path === "/api/session" && request.method === "GET") {
+    // 看板每次打开都先要这个：顺带记下「最近一次打开」（后台看谁在用）
+    await touchLastSeen(env, user.id, nowMs);
     return json({
       ok: true,
       user: { email: user.email, role: user.role },
@@ -204,7 +212,25 @@ export async function handleApi(request: Request, env: Env, nowMs: number, deps:
       extraForwarders: user.forwarders.split(",").filter((s) => s.includes("@")),
       maxExtraForwarders: MAX_EXTRA_FORWARDERS,
       ai: { enabled: user.ai_enabled !== 0, usedToday: await aiUsageToday(env, user.id, nowMs), dailyLimit: user.role === "owner" ? null : aiDailyLimit(env) },
+      askSource: await shouldAskSource(env, user.id, user.role),
     });
+  }
+
+  // 手机上设不了自动转发：把设置链接发到登录邮箱，在电脑上打开接着做
+  if (path === "/api/setup/send" && request.method === "POST") {
+    const body = (await request.json().catch(() => ({}))) as { provider?: unknown };
+    try {
+      const r = await sendSetupMail(env, user, body.provider, url.origin, nowMs);
+      return r.ok ? json({ ok: true, to: r.to }) : fail(r.status, r.error);
+    } catch {
+      return fail(502, "没发出去，稍后再试");
+    }
+  }
+
+  // 「你是从哪知道准点的」的回答（或跳过）。只收一次
+  if (path === "/api/account/source" && request.method === "PUT") {
+    const body = (await request.json().catch(() => ({}))) as { answer?: unknown };
+    return (await saveSourceAnswer(env, user.id, body.answer)) ? json({ ok: true }) : fail(400, "格式不对");
   }
 
   // 除登录邮箱外，还允许哪些邮箱转信进来（比如登录用的是学校邮箱，转信用的是 Gmail）
@@ -249,19 +275,22 @@ export async function handleApi(request: Request, env: Env, nowMs: number, deps:
   // 日历订阅链接：每人一把口令，和登录无关；泄露了就换一把
   if (path === "/api/calendar" && request.method === "GET") {
     const token = user.calendar_token ?? (await resetCalendarToken(env, user.id));
-    return json({ url: `${url.origin}/cal/${token}.ics` });
+    // derivedFromPassword：老账号的口令还是由看板密码算出来的那把，该换一个新链接
+    return json({ url: `${url.origin}/cal/${token}.ics`, derivedFromPassword: await derivedFromPassword(env, token) });
   }
   if (path === "/api/calendar/reset" && request.method === "POST") {
-    return json({ url: `${url.origin}/cal/${await resetCalendarToken(env, user.id)}.ics` });
+    return json({ url: `${url.origin}/cal/${await resetCalendarToken(env, user.id)}.ics`, derivedFromPassword: false });
   }
 
   if (path === "/api/emails" && request.method === "GET") {
     const rows = await env.DB.prepare(
-      "SELECT id, received_at, stored_at, via, from_addr, subject, body, status, outcome, model, error FROM emails WHERE user_id = ? ORDER BY received_at DESC LIMIT 1000",
+      `SELECT id, received_at, stored_at, via, from_addr, subject, body, status, outcome, model, error FROM emails WHERE user_id = ? ORDER BY received_at DESC LIMIT ${MAX_EMAILS_LOADED}`,
     )
       .bind(user.id)
       .all();
-    return json({ emails: rows.results });
+    // total：一共存了多少封。比 emails 多，说明更早的没有返回——看板要写明，不能悄悄少
+    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM emails WHERE user_id = ?").bind(user.id).first<{ n: number }>();
+    return json({ emails: rows.results, total: count?.n ?? rows.results.length });
   }
 
   const purge = /^\/api\/emails\/([^/]+)$/.exec(path);
@@ -297,7 +326,8 @@ export async function handleApi(request: Request, env: Env, nowMs: number, deps:
 
   if (path === "/api/edits" && request.method === "GET") {
     const edits = await getUserSetting(env, user.id, "edits");
-    return json({ edits: edits !== null ? JSON.parse(edits) : null });
+    // version：这一份的指纹。保存时带回来（x-edits-base），服务端据此发现「别处先改过了」
+    return json({ edits: edits !== null ? JSON.parse(edits) : null, version: await versionOf(edits) });
   }
 
   if (path === "/api/edits" && request.method === "PUT") {
@@ -312,8 +342,24 @@ export async function handleApi(request: Request, env: Env, nowMs: number, deps:
     if (typeof parsed !== "object" || parsed === null || (parsed as { version?: unknown }).version !== 1) {
       return fail(400, "数据形状不对");
     }
+    // 页面说明了「我是在哪个版本上改的」：和云端现在的对不上，就是别处（另一台设备、另一个标签页）先存过了。
+    // 不覆盖，把云端那份还回去。没带这个头的是升级前就开着的老页面，照旧存。
+    const base = request.headers.get("x-edits-base");
+    if (base !== null) {
+      const current = await getUserSetting(env, user.id, "edits");
+      const currentVersion = await versionOf(current);
+      if (currentVersion !== base) {
+        let currentEdits: unknown = null;
+        try {
+          currentEdits = current !== null ? JSON.parse(current) : null;
+        } catch {
+          currentEdits = null;
+        }
+        return json({ error: "别处改过了，这一步没有保存", conflict: true, edits: currentEdits, version: currentVersion }, 409);
+      }
+    }
     await putUserSetting(env, user.id, "edits", text, new Date(nowMs).toISOString());
-    return json({ ok: true });
+    return json({ ok: true, version: await versionOf(text) });
   }
 
   if (path === "/api/prefs" && request.method === "GET") {
@@ -370,18 +416,24 @@ export async function handleApi(request: Request, env: Env, nowMs: number, deps:
       return fail(400, "不是合法的 JSON");
     }
     const result = await prepare(env, user, nowMs, parsed);
+    if (result.ok) await bump(env, nowMs, user.id, "use_prepare");
     return result.ok ? json({ prep: result.prep, usedResume: result.usedResume }) : fail(result.status, result.error);
   }
 
   if (path === "/api/quick-add" && request.method === "POST") {
     const body = (await request.json().catch(() => ({}))) as { text?: unknown };
     const result = await quickAdd(env, user, nowMs, body.text);
+    if (result.ok) await bump(env, nowMs, user.id, "use_quick_add");
     return result.ok ? json({ model: result.model, warning: result.warning ?? null }) : fail(result.status, result.error);
   }
 
   if (path === "/api/reparse" && request.method === "POST") {
-    const body = (await request.json().catch(() => ({}))) as { after?: unknown; retryModel?: unknown };
+    const body = (await request.json().catch(() => ({}))) as { after?: unknown; retryModel?: unknown; allUsers?: unknown };
     const after = typeof body.after === "string" && body.after.length > 0 ? body.after : null;
+    if (body.allUsers === true) {
+      if (user.role !== "owner") return fail(403, "只有作者账号能做");
+      return json(await reparseAllBatch(env, after));
+    }
     // retryModel：只重做收信时模型没响应的那几封，这次真的调用模型
     return json(body.retryModel === true ? await retryModelBatch(env, user, after, nowMs) : await reparseBatch(env, user.id, after));
   }
@@ -404,6 +456,7 @@ export async function handleApi(request: Request, env: Env, nowMs: number, deps:
       () => crypto.randomUUID(),
     );
     if (result.kind === "invalid") return fail(400, result.reason);
+    await bump(env, nowMs, user.id, "use_import");
     return json(result);
   }
 

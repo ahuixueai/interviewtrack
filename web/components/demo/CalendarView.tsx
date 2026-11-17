@@ -127,7 +127,7 @@ export function CalendarView({
           })}
         </div>
         <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
-          <span className="rounded bg-accent px-1.5 text-on-accent">准点开始</span>
+          <span className="rounded bg-accent px-1.5 text-on-accent">按时开始</span>
           <span className="rounded bg-offer-soft px-1.5 text-on-offer-soft">截止前完成</span>
           <span className="rounded bg-hairline px-1.5 text-ink-faint line-through">已完成</span>
           <span>日期按{zoneLabel(viewerTimeZone)}显示；待确认的事不画在日历上。</span>

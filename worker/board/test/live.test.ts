@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runDemoParse } from "@/lib/demo/parseDemo";
 import { parseEmail, StubExtractor } from "@/lib/tracker-core/index";
 import type { RawEmail } from "@/lib/tracker-core/index";
-import { extractorNote, forwardingNotices, noticeGroupIds, toLiveData } from "../src/live";
+import { emailCountNotice, extractorNote, forwardingNotices, noticeGroupIds, saveOutcome, toLiveData } from "../src/live";
 import type { EmailRow } from "../src/live";
 
 const VIEWER = "Asia/Shanghai";
@@ -76,7 +76,12 @@ describe("收信记录 → 看板", () => {
       ["b", null],
     ]);
     expect(extractorNote(models, ["a", "b"])).toContain("deepseek-v4-pro");
-    expect(extractorNote(models, ["b"])).toContain("全部由规则判断");
+    expect(extractorNote(models, ["b"])).toContain("没有可用的 AI 模型");
+    // 没用上模型时，按收信时记下的原因说是哪一种
+    const errors = new Map<string, string | null>([["b", "模型调用失败，已退回纯规则：请求超时（20 秒）"]]);
+    expect(extractorNote(models, ["b"], errors)).toBe("收信时 AI 没响应（请求超时（20 秒）），这封只用规则判断。可以在「设置 → 收信」里点「用 AI 重新解析」。");
+    expect(extractorNote(models, ["b"], new Map([["b", "你关掉了 AI，只用规则解析"]]))).toContain("AI 是关着的");
+    expect(extractorNote(models, ["b"], new Map([["b", "今天的 AI 额度用完了，只用规则解析"]]))).toContain("额度用完");
   });
 
 });
@@ -133,5 +138,37 @@ describe("转发确认什么时候不再显示", () => {
     const pending = forwardingNotices(rows, NOW);
     expect(pending.map((n) => [n.id, n.code])).toEqual([["c", "333333333"]]);
     expect(pending[0]!.links).toEqual([{ label: "一键确认转发", url: "https://mail-settings.google.com/mail/vf-c" }]);
+  });
+});
+
+const THEIRS = { version: 1, completions: { "mail-1": { state: "done", atMs: 1 } } };
+
+describe("看板怎么理解保存的结果", () => {
+  it("成功：记下新版本号", () => {
+    expect(saveOutcome(200, { ok: true, version: "abc" })).toEqual({ kind: "saved", version: "abc" });
+  });
+  it("老服务端没给版本号：算成功，版本未知（之后不带版本号存）", () => {
+    expect(saveOutcome(200, { ok: true })).toEqual({ kind: "saved", version: null });
+  });
+  it("409：拿云端那份换掉页面上的", () => {
+    expect(saveOutcome(409, { conflict: true, edits: THEIRS, version: "v2" })).toEqual({ kind: "conflict", edits: THEIRS, version: "v2" });
+  });
+  it("401：要重新登录；别的错误：失败", () => {
+    expect(saveOutcome(401, {})).toEqual({ kind: "signed-out" });
+    expect(saveOutcome(500, { error: "x" })).toEqual({ kind: "failed" });
+    expect(saveOutcome(409, { error: "别的 409" })).toEqual({ kind: "failed" });
+  });
+});
+
+describe("标题下面那句有多少封信", () => {
+  it("没有信：告诉你往哪转；有信：说封数", () => {
+    expect(emailCountNotice(0, 0, "jobs@my.example")).toContain("jobs@my.example");
+    expect(emailCountNotice(42, 42, "jobs@my.example")).toBe("42 封转发来的邮件");
+    expect(emailCountNotice(42, null, "jobs@my.example")).toBe("42 封转发来的邮件");
+  });
+  it("存的比显示的多：必须说出来，不能悄悄少", () => {
+    const text = emailCountNotice(1000, 1234, "jobs@my.example");
+    expect(text).toContain("1000");
+    expect(text).toContain("1234");
   });
 });

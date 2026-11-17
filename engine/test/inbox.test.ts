@@ -40,7 +40,7 @@ function outcome(over: Partial<ParsedEvent> = {}, rawHash?: string): ParseOutcom
         confidence: "high", reason: "正文命中信号词", mergeAs: null,
       },
       format: { format: "unspecified", reason: "测试夹具" },
-      action: { links: [], credentials: [] },
+      action: { links: [], linkDetails: [], credentials: [] },
       tz: { tz: "Asia/Shanghai", confidence: "high", source: "explicit", reason: "写明北京时间" },
       due: {
         dueType: ev.dueType, startUtc: ev.startUtc, endUtc: ev.endUtc,

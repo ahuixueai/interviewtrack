@@ -41,6 +41,11 @@ export interface EventTypeClassification {
    * 管线据此不采纳模型的类型建议——否则模型一句「这是面试」，广告就带着「待确认」挤进你的收件箱。
    */
   final?: boolean;
+  /**
+   * 预通知：「正式测试链接将于 11 月 1 日发送至你的邮箱」。说的是**以后会来一封**正式邀请，
+   * 信里的日期是发链接的日子，不是考试或截止。管线据此不取时间、不排进日程，只记进投递表。
+   */
+  preNotice?: boolean;
 }
 
 /** actionable 完全由 eventType 决定，见方案对「行动项 vs 通知」的划分。 */
@@ -100,6 +105,91 @@ const CATEGORY_ORDER: ReadonlyArray<readonly [EventType, RegExp]> = [
 ];
 
 /**
+ * 明确的拒绝，要排在「测评 / 面试」之前看。
+ *
+ * 一封真实的拒信：「很抱歉暂时无法为你安排后续环节……希望未来或有机会邀请你参加其他岗位的面试」。
+ * 按类别顺序扫，「面试」两个字先命中，一封拒信就成了「面试（形式未说明）」摆进待确认。
+ * 拒绝说的是**这一次的结论**，后面提到的面试、测评是以后的可能，不是要你去做的事。
+ *
+ * 只收不会出现在邀请里的强表述，并且挡掉条件句：
+ * 「如未按时完成，很遗憾将无法进入下一环节」说的是后果，不是结论。
+ */
+const STRONG_REJECTION =
+  /(?:很抱歉|很遗憾|遗憾地)[^。！!？?\n]{0,12}?(?:暂时|暂|目前)?(?:无法|不能|未能)(?:为你|为您|给你|给您)?(?:安排|进入|继续|推进)[^。！!？?\n]{0,4}?(?:后续|下一|下轮|面试|笔试|流程|环节)|无法为(?:你|您)安排后续|(?:很遗憾|很抱歉)[^。！!？?\n]{0,20}?(?:未能通过|没有通过|未通过|未被录用|未入选|不匹配)/;
+const CONDITIONAL_BEFORE = /如果|若|如未|如您未|如你未|如逾期|否则|逾期|未按时|未在规定/;
+
+function strongRejection(text: string): string | null {
+  const m = STRONG_REJECTION.exec(text);
+  if (!m) return null;
+  const sentenceStart = Math.max(...["。", "！", "!", "？", "?", "\n"].map((c) => text.lastIndexOf(c, m.index))) + 1;
+  if (CONDITIONAL_BEFORE.test(text.slice(sentenceStart, m.index + m[0].length))) return null;
+  return m[0];
+}
+
+/**
+ * 信里**提到**一个环节，不等于这封信**是**那个环节（2026-11-10 样本外评测）。
+ *
+ * 按词扫正文时，下面三种「提到」会抢走真正的结论，扫之前先遮掉：
+ * - 上一轮的客套：「Thank you for attending our recent assessment」「感谢您参加在线笔试」
+ * - 做完的确认：「your assessment was successfully submitted」
+ * - 以后的安排：「笔面试将滚动安排」「后续面试将另行通知」——必须带「滚动 / 另行 / 后续」这类词，
+ *   而且中间不能有数字：「面试将于 10 月 20 日 14:00 进行」是真的日程，不遮
+ *
+ * 遮掉之后什么都不剩时，退回没遮的正文再扫一遍（见 scanCategory）：
+ * 「感谢您参加某公司在线测评环节，请于 3 天内完成」里的「参加」是现在要做，不是客套。
+ */
+const MENTION_ONLY: readonly RegExp[] = [
+  /thank(?:s|\s+you)\s+for\s+(?:taking\s+the\s+time\s+to\s+)?(?:attend(?:ing)?|complet(?:e|ing)|tak(?:e|ing)|participat(?:e|ing)\s+in)\b[^.!?\n]{0,60}/gi,
+  /(?:assessment|test)\s+(?:was|has\s+been)\s+successfully\s+(?:submitted|completed)/gi,
+  /感谢(?:您|你)?(?:参加|完成|参与)[^。！!？?\n，,]{0,30}/g,
+  /(?:笔面试|笔试|面试|测评)[^。；;！!\n，,\d]{0,10}?(?:将|会)[^。；;！!\n，,\d]{0,8}?(?:滚动|陆续|另行|另外|后续|稍后)[^。；;！!\n，,\d]{0,6}?(?:安排|通知|开展|进行|发送)/g,
+];
+
+function maskMentions(text: string): string {
+  let out = text;
+  for (const pattern of MENTION_ONLY) out = out.replace(pattern, (m) => " ".repeat(m.length));
+  return out;
+}
+
+/**
+ * 「已提交」的确认：「Thank you for completing your Assessment」。
+ * 正文满篇 assessment，但它说的是做完了，不是又一场测评。
+ * 遮掉客套和确认之后还剩测评 / 面试的（「做完了，下一步请参加面试」）不算。
+ */
+const COMPLETION_CONFIRMATION =
+  /thank(?:s|\s+you)\s+for\s+(?:taking\s+the\s+time\s+to\s+)?(?:complet(?:e|ing)|submitting)\b[^.!?\n]{0,60}(?:assessment|test)|(?:assessment|test)\s+(?:was|has\s+been)\s+successfully\s+(?:submitted|completed)/i;
+
+function isCompletionConfirmation(subject: string, body: string): boolean {
+  if (!COMPLETION_CONFIRMATION.test(subject) && !COMPLETION_CONFIRMATION.test(body)) return false;
+  const rest = `${maskMentions(subject)} ${maskMentions(body)}`;
+  return !CATEGORY_ORDER.some(([type, pattern]) => (type === "assessment" || type === "interview") && pattern.test(rest));
+}
+
+/**
+ * 标题明写「面试邀请」「笔试通知」，而且正文里也确实在说这件事：按标题说的那一步算。
+ *
+ * 类别顺序里测评排在面试前面，于是一封「经理面试邀请函」只要正文出现一次 assessment
+ *（「next stage of the assessment process」）就会被判成测评。
+ * 仍然要求正文里读得出同一类——标题写测评、正文其实是 AI 面试的那种标题党照旧按正文判。
+ * 标题同时写了两类的不用这条。
+ */
+const SUBJECT_INVITE: ReadonlyArray<readonly [EventType, RegExp]> = [
+  ["interview", /面试(?:邀请|邀约|通知|安排)|interview\s+invitation|invitation\s+(?:to|for)\s+(?:an?\s+|the\s+)?interview/i],
+  [
+    "assessment",
+    /(?:笔试|测评|测试)(?:邀请|邀约|通知|安排)|(?:assessment|test)\s+invitation|invitation\s+(?:to|for)\s+(?:an?\s+|the\s+)?(?:online\s+)?(?:assessment|test)/i,
+  ],
+];
+
+function subjectInvite(subject: string, body: string): readonly [EventType, RegExp] | null {
+  const named = SUBJECT_INVITE.filter(([, pattern]) => pattern.test(subject));
+  if (named.length !== 1) return null;
+  const type = named[0]![0];
+  const entry = CATEGORY_ORDER.find(([t]) => t === type);
+  return entry && entry[1].test(body) ? entry : null;
+}
+
+/**
  * 正文优先于标题：body 是唯一的判定来源，命中即用；body 什么都没命中
  * 才退回标题。这条顺序关系不是「加权」，是硬优先级——
  *
@@ -110,11 +200,18 @@ const CATEGORY_ORDER: ReadonlyArray<readonly [EventType, RegExp]> = [
  * 无论标题怎么写都不会被判成 assessment。
  */
 function scanCategory(subject: string, body: string): readonly [EventType, RegExp] | null {
+  // 先扫遮掉「只是提到」之后的正文；什么都不剩时再看标题，最后才退回没遮的正文
+  const masked = maskMentions(body);
   for (const entry of CATEGORY_ORDER) {
-    if (entry[1].test(body)) return entry;
+    if (entry[1].test(masked)) return entry;
   }
   for (const entry of CATEGORY_ORDER) {
     if (entry[1].test(subject)) return entry;
+  }
+  if (masked !== body) {
+    for (const entry of CATEGORY_ORDER) {
+      if (entry[1].test(body)) return entry;
+    }
   }
   return null;
 }
@@ -124,7 +221,31 @@ function scanCategory(subject: string, body: string): readonly [EventType, RegEx
  * 而不是新建一条 update。分类结果是「被改期的那个事件类型」
  * （面试改期还是面试，不会因为改期就变成 update），但强制 shouldMerge=true。
  */
-const RESCHEDULE_MARK = /时间调整|调整至|改期|重新安排|reschedul(?:e|ing|ed)|原定.{0,30}(?:调整|改)/;
+const RESCHEDULE_MARK = /时间调整|调整至|改期|重新安排|reschedul(?:e|ing|ed)|原定.{0,30}(?:调整|改)/g;
+
+/**
+ * 真的是改期通知，而不是「如果你没法按时参加，请回信申请调整至 xx 月 xx 日」这种须知。
+ * 有一封笔试预通知就是后一种：一封正常的通知被当成了改期，合并去覆盖原来的时间。
+ * 所在句子带条件词或「xx 月」这类占位符的不算。
+ */
+const RESCHEDULE_NOT_REAL = /如果|若|如需|如无法|如你无法|如您无法|如不能|无法按时|示例|例如|[xX×]{1,2}\s*月|[xX×]{1,2}\s*日/;
+
+function isReschedule(text: string): boolean {
+  for (const m of text.matchAll(RESCHEDULE_MARK)) {
+    const start = Math.max(...["。", "！", "!", "？", "?", "\n"].map((c) => text.lastIndexOf(c, m.index))) + 1;
+    const ends = ["。", "！", "!", "？", "?", "\n"].map((c) => text.indexOf(c, m.index)).filter((i) => i >= 0);
+    const end = ends.length > 0 ? Math.min(...ends) : text.length;
+    if (!RESCHEDULE_NOT_REAL.test(text.slice(start, end))) return true;
+  }
+  return false;
+}
+
+/**
+ * 预通知：正式的测评 / 面试邀请还没发，这封只是告诉你「会来、注意查收」。
+ * 要同时有「之后会发 / 即将邀请」的意思，免得把正式邀请里一句「请注意查收」也算进来。
+ */
+const PRE_NOTICE =
+  /预通知|即将(?:邀请|向你|向您|给你|给您)[^。\n]{0,10}(?:进入|参加)|(?:链接|邀请|邮件)[^。\n]{0,24}(?:将|会)于[^。\n]{0,30}发送(?:至|到|给)(?:你|您)|(?:将|会)于[^。\n]{0,30}(?:发送|发出)[^。\n]{0,12}(?:测试|测评|笔试|面试)(?:链接|邀请)/;
 
 /**
  * 催办/紧急提醒：要么是明确的「提醒」前缀（重复提醒、Reminder:、Re:），
@@ -152,6 +273,18 @@ function looksLikeReminder(subject: string, body: string): boolean {
  * 它不是流程里的任何一步，填不填都不影响结果。只看标题，正文里顺带提到问卷的不算。
  */
 const SURVEY_SUBJECT = /满意度|体验(?:调查|调研|反馈问卷)|问卷调查|调研问卷|(?:雇主|品牌)[^，,。]{0,6}调研|(?:satisfaction|experience)\s+survey/i;
+
+/**
+ * 标题是「请你评价这次面试」：面试后的评价邀请（「某公司诚邀你对本次面试进行评价」）。
+ *
+ * 和上面的问卷是一回事，只是不说「问卷」「调研」，说「评价」「打分」。
+ * 标题和正文都满是「面试」，信里又没有时间，会被判成一场没写时间的面试摆进待确认（2026-11-16 真实情况）。
+ *
+ * 必须是「邀请 / 请 你……对……面试……评价」，或者「对本次面试……评价」这种指着刚结束那一场说的句式：
+ * 「面试评价结果通知」是结果，「面试官将对你进行评价」是面试须知，都不能挡。只看标题。
+ */
+const RATING_INVITE_SUBJECT =
+  /(?:邀请?|请)(?:你|您)?[^，,。]{0,4}对[^，,。]{0,10}(?:面试|笔试|测评)[^，,。]{0,6}(?:评价|打分|评分)|对(?:本次|此次|这次|本场|该次)(?:面试|笔试|测评)[^，,。]{0,6}(?:评价|打分|评分)/;
 
 /**
  * 招聘方和招聘网站的**营销群发**：宣讲会、直播、双选会、「X 秋招开启」、岗位推荐、「邀您投递」。
@@ -219,6 +352,10 @@ export function classifyEventType(signals: EventTypeSignals): EventTypeClassific
     return { ...withActionable("other", false, "low", "标题是满意度调查/问卷：不是流程里的一步"), final: true };
   }
 
+  if (RATING_INVITE_SUBJECT.test(subject)) {
+    return { ...withActionable("other", false, "low", "标题是请你评价刚结束的那场面试 / 笔试：不是流程里的一步"), final: true };
+  }
+
   if (STRONG_PROMO.test(subject)) {
     return { ...withActionable("other", false, "low", "标题是宣讲会 / 直播 / 专场 / 平台推荐这类活动广告：不是你流程里的一步"), final: true };
   }
@@ -233,7 +370,26 @@ export function classifyEventType(signals: EventTypeSignals): EventTypeClassific
     }
   }
 
-  if (RESCHEDULE_MARK.test(full)) {
+  if (PRE_NOTICE.test(full)) {
+    const about = scanCategory(subject, body)?.[0];
+    if (about === "assessment" || about === "interview") {
+      return {
+        ...withActionable(about, false, "high", `预通知：正式的${about === "assessment" ? "测评" : "面试"}邀请还没发，信里的日期是发邀请的日子；等正式邮件来了再排日程`),
+        preNotice: true,
+      };
+    }
+  }
+
+  const rejected = strongRejection(body) ?? strongRejection(subject);
+  if (rejected !== null) {
+    return withActionable("result", false, "high", `明确的拒绝：「${rejected}」；信里再提到面试、测评，说的是以后的机会`);
+  }
+
+  if (isCompletionConfirmation(subject, body)) {
+    return { ...withActionable("other", false, "low", "「已提交 / 已完成」的确认：不是要你做的事"), final: true };
+  }
+
+  if (isReschedule(full)) {
     const underlying = scanCategory(subject, body);
     const type = underlying?.[0] ?? "update";
     return withActionable(
@@ -260,6 +416,11 @@ export function classifyEventType(signals: EventTypeSignals): EventTypeClassific
 
   if (UPDATE_SUBJECT.test(subject)) {
     return withActionable("update", false, "high", "标题命中补充/更新材料：按 update 处理，不看正文里顺带提到的环节词");
+  }
+
+  const invited = subjectInvite(subject, body);
+  if (invited) {
+    return withActionable(invited[0], false, "high", `标题写明是 ${invited[0]} 的邀请 / 通知，正文也在说这件事`);
   }
 
   const hit = scanCategory(subject, body);

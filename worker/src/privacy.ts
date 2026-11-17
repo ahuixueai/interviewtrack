@@ -13,7 +13,7 @@ import type { Env } from "./types.js";
 export const DELETE_CONFIRM_TEXT = "删除全部数据";
 
 export async function deleteUserData(env: Env, user: User): Promise<void> {
-  for (const table of ["emails", "notices", "user_settings", "ai_usage", "reminders_sent"] as const) {
+  for (const table of ["emails", "notices", "user_settings", "ai_usage", "reminders_sent", "daily_stats"] as const) {
     await env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id).run();
   }
   await env.DB.prepare("DELETE FROM login_codes WHERE email = ?").bind(user.email).run();

@@ -25,6 +25,11 @@ const PROVIDERS: readonly { id: Provider; label: string }[] = [
   { id: "other", label: "其他" },
 ];
 
+/** 设置步骤邮件里的链接 ?setup=<这些之一>：在电脑上打开后直接进到那家邮箱的步骤。 */
+export function isProvider(value: string | null): value is Provider {
+  return PROVIDERS.some((p) => p.id === value);
+}
+
 // 词表和收信时「像不像招聘信」共用一份，在 worker/src/jobWords.ts 里改
 
 /** Gmail 过滤器「包含字词」：关键词 OR 发件域名，一整段粘贴（Gmail 连正文一起搜）。 */
@@ -198,6 +203,75 @@ function steps(provider: Provider, inbox: string, confirm: React.ReactNode): { s
   }
 }
 
+
+/** 是不是手机（窄屏）。手机上设不了自动转发，要换个说法。 */
+export function usePhone(): boolean {
+  const query = "(max-width: 767px)";
+  const [phone, setPhone] = useState(() => typeof window !== "undefined" && window.matchMedia?.(query).matches === true);
+  useEffect(() => {
+    const m = window.matchMedia?.(query);
+    if (!m) return;
+    const on = () => setPhone(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return phone;
+}
+
+/** 手机上能找到自动转发设置的邮箱 App：一个都没有（Gmail、Outlook 官方说明只能在电脑上设；QQ、163 只查到电脑网页版的步骤）。 */
+function PhoneSetupHelp({ provider, inWizard = false }: { provider: Provider; inWizard?: boolean }) {
+  const { session } = useSession();
+  const [state, setState] = useState<{ busy: boolean; text: string | null; ok: boolean }>({ busy: false, text: null, ok: false });
+  const label = PROVIDERS.find((p) => p.id === provider)?.label ?? "你的邮箱";
+  const known = provider === "gmail" || provider === "qq" || provider === "163" || provider === "outlook";
+  const send = () => {
+    setState({ busy: true, text: null, ok: false });
+    fetch("/api/setup/send", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider }) })
+      .then(async (r) => {
+        const body = (await r.json().catch(() => ({}))) as { to?: string; error?: string };
+        setState(r.ok ? { busy: false, ok: true, text: `已发到 ${body.to ?? session.email}，到电脑上打开那封信里的链接就行。` } : { busy: false, ok: false, text: body.error ?? `没发出去（${r.status}）` });
+      })
+      .catch(() => setState({ busy: false, ok: false, text: "没发出去，检查一下网络再试" }));
+  };
+  return (
+    <div className="rounded-xl border border-accent bg-accent-soft p-4 text-sm text-ink" data-phone-setup>
+      <p className="font-semibold">你在用手机：自动转发要在电脑上设一次（约 3 分钟）</p>
+      <p className="mt-1 text-ink-soft">{known ? `${label}的手机 App 里没有自动转发设置。` : "大多数邮箱的手机 App 里没有自动转发设置。"}现在可以这样：</p>
+      <ol className="mt-3 space-y-3">
+        <li className="flex gap-2.5">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-ink text-[11px] font-semibold text-canvas" aria-hidden>
+            1
+          </span>
+          <div className="min-w-0 flex-1">
+            <button type="button" onClick={send} disabled={state.busy || state.ok} data-action="send-setup-mail" className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-sm font-semibold text-canvas disabled:opacity-60">
+              <Mail size={15} aria-hidden />
+              {state.busy ? "发送中…" : state.ok ? "已发送" : "把步骤发到我邮箱"}
+            </button>
+            <p className="mt-1.5 text-xs text-ink-soft">到电脑上打开那封信里的链接，登录后直接从这一步接着做。</p>
+            {state.text ? (
+              <p role={state.ok ? "status" : "alert"} className={`mt-1.5 text-xs ${state.ok ? "text-on-offer-soft" : "text-on-drop-soft"}`} data-setup-mail-result>
+                {state.text}
+              </p>
+            ) : null}
+          </div>
+        </li>
+        <li className="flex gap-2.5">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-ink text-[11px] font-semibold text-canvas" aria-hidden>
+            2
+          </span>
+          <div className="min-w-0 flex-1">
+            <p>
+              现在先试试：在邮箱 App 里把一封招聘邮件<B>手动转发</B>到这个地址，几分钟内就会出现在准点里。
+            </p>
+            <CopyChip value={session.inbox} label="复制收信地址" />
+          </div>
+        </li>
+      </ol>
+      <p className="mt-3 text-xs text-ink-soft">{inWizard ? "已经在电脑上了？点右下角「开始」。" : "已经在电脑上了？照下面的步骤做就行。"}</p>
+    </div>
+  );
+}
+
 /** 选邮箱的按钮 + 「只收哪些邮箱转来的信」。 */
 function ProviderPicker({ provider, onChange }: { provider: Provider; onChange: (p: Provider) => void }) {
   const { session } = useSession();
@@ -292,6 +366,7 @@ interface SetupProps {
 export function ForwardSetup({ emailCount, confirmations, viewerTimeZone, onConfirmDone }: SetupProps) {
   const { session } = useSession();
   const [provider, setProvider] = useState<Provider>(() => guessProvider(session.email));
+  const phone = usePhone();
   const { steps: list, note } = steps(provider, session.inbox, confirmBlock(provider, confirmations, viewerTimeZone, onConfirmDone));
   return (
     <section data-forward-setup={provider} className="mb-5 rounded-card border border-hairline bg-surface p-4 sm:p-5">
@@ -299,6 +374,11 @@ export function ForwardSetup({ emailCount, confirmations, viewerTimeZone, onConf
       <div className="mt-4">
         <ProviderPicker provider={provider} onChange={setProvider} />
       </div>
+      {phone && emailCount === 0 ? (
+        <div className="mt-4">
+          <PhoneSetupHelp provider={provider} />
+        </div>
+      ) : null}
       <ol className="mt-5 space-y-4" data-setup-steps>
         {list.map((step, i) => (
           <li key={i} className="flex gap-3">
@@ -345,6 +425,7 @@ export function SetupWizard({
   const { session } = useSession();
   const provider = chosen ?? guessProvider(session.email);
   const setProvider = onChoose;
+  const phone = usePhone();
   const { steps: list, note } = steps(provider, session.inbox, confirmBlock(provider, confirmations, viewerTimeZone, onConfirmDone, onRefresh));
   const last = list.length + 1;
   const current = Math.min(page, last);
@@ -375,6 +456,11 @@ export function SetupWizard({
         <div className="mt-6">
           <ProviderPicker provider={provider} onChange={setProvider} />
         </div>
+        {phone ? (
+          <div className="mt-5">
+            <PhoneSetupHelp provider={provider} inWizard />
+          </div>
+        ) : null}
       </>
     );
   } else if (current <= list.length) {

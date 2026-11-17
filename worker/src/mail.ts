@@ -37,7 +37,31 @@ export function htmlToText(html: string): string {
   return decodeEntities(text);
 }
 
-const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  // 排版符号：中文模板常把引号、省略号写成实体（有的拒信里满是 &ldquo;不匹配&rdquo;）
+  ldquo: "“",
+  rdquo: "”",
+  lsquo: "‘",
+  rsquo: "’",
+  laquo: "«",
+  raquo: "»",
+  hellip: "…",
+  mdash: "—",
+  ndash: "–",
+  middot: "·",
+  bull: "•",
+  times: "×",
+  yen: "¥",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+};
 
 function decodeEntities(value: string): string {
   return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, name: string) => {
@@ -117,6 +141,52 @@ export function admit(envelopeFrom: string, headerFrom: string, headers: readonl
   const tagged = /^(?:auto_)?([^+@]+)\+[^@]*(@.+)$/.exec(envelope);
   if (tagged && allow.includes(`${tagged[1]}${tagged[2]}`)) return { kind: "job", via: "auto" };
   return { kind: "reject", reason: "发件人不在允许列表里" };
+}
+
+/**
+ * 这封被接收的信是凭什么被接收的——只记录，**不参与**收不收的决定（那仍然只由 admit 定）。
+ *
+ * 为什么要记：要把收信规则收紧到「看认证结果」，得先知道各家邮箱的转发信长什么样，
+ * 否则会把真的转发信挡掉。所以先攒数据：
+ *
+ *   规则 | 信封的形状 | 认证结果是谁写的 | spf | dkim | dmarc
+ *   xff|env:caf|auth:cf|spf:pass|dkim:pass|dmarc:pass
+ *
+ * - 规则：xff（X-Forwarded-For）/ resent（Resent-From）/ from（发件人就是你）/ envelope（信封发件人就是你）/ tagged（QQ、网易的带标记信封）
+ * - 信封：caf = Gmail 自动转发生成的「你+caf_=收信地址@gmail.com」；tagged = QQ / 网易那种；allowed = 就是你的地址；other = 别的
+ * - 认证：cf = Cloudflare 收信时写的；other = 信里自带的（发信人能伪造，只作参考）；none = 没有
+ *
+ * 不含任何地址、域名和邮件内容。没被接收的返回 null。
+ */
+export function admissionEvidence(envelopeFrom: string, headerFrom: string, headers: readonly Header[], allow: readonly string[]): string | null {
+  const verdict = admit(envelopeFrom, headerFrom, headers, allow);
+  if (verdict.kind !== "job") return null;
+  const envelope = envelopeFrom.toLowerCase();
+  const tagged = /^(?:auto_)?([^+@]+)\+[^@]*(@.+)$/.exec(envelope);
+  const isTagged = tagged !== null && allow.includes(`${tagged[1]}${tagged[2]}`);
+  const isCaf = isTagged && /\+caf_=/.test(envelope);
+
+  let rule: string;
+  if (headerValues(headers, "x-forwarded-for").flatMap(addressesIn).some((a) => allow.includes(a))) rule = "xff";
+  else if (headerValues(headers, "resent-from").flatMap(addressesIn).some((a) => allow.includes(a))) rule = "resent";
+  else if (addressesIn(headerFrom).some((a) => allow.includes(a))) rule = "from";
+  else if (allow.includes(envelope)) rule = "envelope";
+  else rule = "tagged";
+
+  const env = isCaf ? "caf" : isTagged ? "tagged" : allow.includes(envelope) ? "allowed" : "other";
+
+  const results = [...headerValues(headers, "arc-authentication-results"), ...headerValues(headers, "authentication-results")];
+  const byCloudflare = results.filter((value) => /mx\.cloudflare\.net/i.test(value));
+  const source = byCloudflare.length > 0 ? byCloudflare : results;
+  const auth = byCloudflare.length > 0 ? "cf" : results.length > 0 ? "other" : "none";
+  const pick = (name: string): string => {
+    for (const value of source) {
+      const m = new RegExp(`\\b${name}=([a-z]+)`, "i").exec(value);
+      if (m) return (m[1] ?? "-").toLowerCase().slice(0, 12);
+    }
+    return "-";
+  };
+  return `${rule}|env:${env}|auth:${auth}|spf:${pick("spf")}|dkim:${pick("dkim")}|dmarc:${pick("dmarc")}`;
 }
 
 export interface ForwardedOriginal {

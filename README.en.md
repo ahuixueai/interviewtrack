@@ -82,7 +82,7 @@ Scored against what the hosted product actually stored: 76 emails my own account
 | Ads / unrelated email wrongly on the schedule | 0 / 6 | 0 / 46 |
 | Exact time correct | 5 / 5 | 15 / 15 |
 
-**Discount these numbers:** only 15 emails are truly unseen, far too few to conclude anything; mail dropped by the first filter was never stored and is not in the sample; it is still one mailbox and one person. What it shows is direction: no wrong time was displayed, but recall is below the in-sample 72.8%, and everything that missed the schedule was held in "needs confirmation". The three event-type errors this exposed have been fixed in the hosted product (see "Repository vs. hosted product" below).
+**Discount these numbers:** only 15 emails are truly unseen, far too few to conclude anything; mail dropped by the first filter was never stored and is not in the sample; it is still one mailbox and one person. What it shows is direction: no wrong time was displayed, but recall is below the in-sample 72.8%, and everything that missed the schedule was held in "needs confirmation". The three event-type errors this exposed have been fixed (see "Repository vs. hosted product" below).
 
 ## What the demo shows
 
@@ -121,23 +121,23 @@ Deploy steps and the security notes are in [worker/README.md](./worker/README.md
 
 ## Repository vs. hosted product
 
-The code here is a **snapshot from 20 October 2026**, exported by hand and not synced automatically. The hosted product has moved on; the following is live but not in this repository yet, and will come with the next export:
+This repository is **exported by hand** from a private development repository and is not synced automatically. The latest export is from **16 November 2026** and matches the hosted version at that time. Main changes since the 20 October export:
 
-- **Better event types**: a rejection that contains the word "interview" is no longer an interview; an email that *mentions* a step is not that step (a receipt saying "you will be invited to an assessment later"); post-interview feedback requests are folded; an exam pre-notice is no longer treated as a reschedule.
+- **Better event types**: a rejection that contains the word "interview" is no longer an interview; an email that *mentions* a step is not that step (thanks for attending the previous assessment, a receipt saying interviews "will be scheduled on a rolling basis", a submission confirmation); post-interview feedback requests are folded; an exam pre-notice is no longer treated as a reschedule.
 - **More conservative times**: date-only events no longer show a made-up clock time, and the day a link was sent is no longer taken as the exam time.
 - **Cards**: links are ordered by purpose (exam entry first, confirm attendance second, practice and instructions under "other links"); the schedule is sorted by time, with small-hours slots flagged alongside the original time; one click moves an item from "needs confirmation" to the schedule.
 - **Multiple devices**: saves are version-checked, so two open boards no longer overwrite each other.
 - **Calendar feed links** are now randomly generated.
-- **Tests**: a real-browser smoke test covering sign-in, confirm, mark done and reload.
+- **Tests**: a real-browser smoke test covering sign-in, confirm, mark done and reload (`worker/e2e/smoke.mjs`).
 
-The test counts under "Repository layout" and "Run it" therefore describe the code in this repository, not the hosted version.
+The operator's local statistics tool and export scripts are not part of this repository.
 
 ## Repository layout
 
 ```
-engine/   Parsing engine. Pure TypeScript, zero runtime dependencies. 509 tests.
-web/      Next.js app (the demo). The engine is vendored into web/lib/tracker-core. 166 tests.
-worker/   Cloudflare Worker: email intake, accounts, reminders, calendar feed, AI endpoints, and the board (Vite). 138 tests.
+engine/   Parsing engine. Pure TypeScript, zero runtime dependencies. 551 tests.
+web/      Next.js app (the demo). The engine is vendored into web/lib/tracker-core. 176 tests.
+worker/   Cloudflare Worker: email intake, accounts, reminders, calendar feed, AI endpoints, and the board (Vite). 181 tests.
 docs/     Evaluation method and numbers.
 ```
 
@@ -149,20 +149,20 @@ Requires Node.js 20.9 or later; the worker tests need 22.13 or later (they use n
 # engine
 cd engine
 npm ci
-npm test                 # 509 tests
+npm test                 # 551 tests
 npm run check            # type-check + tests with per-file coverage threshold
 
 # web
 cd web
 npm ci
 npm run dev              # http://localhost:3000
-npm test                 # 166 tests
+npm test                 # 176 tests
 npm run check            # types + lint + tests + production build
 
 # worker (install web first: the board reuses its components)
 cd worker
 npm ci
-npm run check            # types + 138 tests + board build (needs Node 22.13+ for node:sqlite in tests)
+npm run check            # types + 181 tests + board build (needs Node 22.13+ for node:sqlite in tests)
 ```
 
 To use a real model instead of the recorded output, any OpenAI-compatible chat endpoint works:
@@ -178,11 +178,11 @@ To score the engine on your own mailbox, see `engine/tools/eval-extract.ts` and 
 ## Known limitations
 
 - **Unseen-email validation is thin.** One pass, 15 truly unseen emails, 55.6% recall (see above). More are being collected.
-- **This repository lags the hosted product.** See "Repository vs. hosted product".
+- **This repository is exported by hand** and may lag the hosted product. See "Repository vs. hosted product".
 - **The demo has no backend.** Manual edits there live in the browser's local storage. The server side lives in `worker/` (see above).
 - **Beta.** Seats are capped and the sending quota is shared between sign-in codes and reminders. "Forward everything" has been verified end to end for QQ Mail; NetEase 163 and Outlook follow the same pattern but have not been walked through yet.
 - **Promotional filtering is rule-based and in-sample.** Campus talks, live streams, job-board recommendations and "applications are open" mail are recognised from the subject line and folded; new marketing phrasings will slip through until a rule is added. The "mark as ad" button blocks a sender as a fallback.
-- **"Conditional future" mentions.** A receipt that says "you will be invited to an assessment within 24 hours" is still classified as an assessment by the rules. In this snapshot it is caught by the model's veto and held for confirmation; the rule itself has since been fixed in the hosted product.
+- **"Conditional future" mentions.** A receipt that says "you will be invited to an assessment within 24 hours" is still classified as an assessment by the rules. It is caught by the model's veto and held for confirmation, but the rule itself is not fully fixed.
 - **Emails with no time-zone evidence** are held for confirmation by design, even when a human could guess the zone from the company.
 - **One company under two names** (an English brand in one email, the full Chinese legal name in another) shows up as two items; the system does not yet recognise them as the same company.
 - Source comments are in Chinese and occasionally reference internal design notes that are not part of this repository.

@@ -87,6 +87,8 @@ function placeOf(result: DemoResult): Place {
     // 投递回执、拒信 / 结果通知：系统拿得准拿不准都一样——没有要你做的事，只进投递表做统计（作者 10/13 定）。
     // 147 封评测里被判成这两类的 26 封全是真回执 / 拒信，没有一封带要你去做的事。
     if (result.eventType === "application_ok" || result.eventType === "result") return "tracked";
+    // 预通知：正式邀请还没来，来了那封才排日程；这封只说明「过了简历、要考试了」
+    if (result.preNotice) return "tracked";
     return result.destination === "board" ? "board" : "pending";
   }
   return "ignored";
@@ -158,6 +160,24 @@ function manualToItem(event: ManualEvent, viewerTimeZone: string): AgendaItem {
 }
 
 /**
+ * 你对这件事的决定记在哪个 id 上，这件事就继续用哪个 id。
+ *
+ * 一件事的 id 默认是它最早那封信的 id（buildAgenda）。可是「最早那封」会换：
+ * 标完成之后又导入一封原信时间更早的同事件邮件，id 就变成了新来那封的，
+ * 原来记在旧 id 上的完成、确认、编辑全都对不上——看上去就是「完成状态自己没了」。
+ *
+ * 所以：现在这个 id 上没有任何记录、而这件事的另一封来信的 id 上有，就沿用那个 id。
+ * 旧数据不用迁移；之后的撤销、再编辑也都落在同一个 id 上，不会分成两份。
+ */
+function anchored(item: AgendaItem, edits: UserEdits): AgendaItem {
+  const recorded = (id: string): boolean =>
+    edits.decisions[id] !== undefined || edits.itemEdits[id] !== undefined || edits.completions[id] !== undefined;
+  if (item.origin !== "email" || recorded(item.id)) return item;
+  const id = item.sources.map((source) => source.sampleId).find(recorded);
+  return id === undefined ? item : { ...item, id };
+}
+
+/**
  * 把用户的决定叠到解析结果上，得到最终的日程。
  *
  * 解析结果每次现场重算，决定单独存——所以引擎以后变聪明了，用户没碰过的事会跟着变好，
@@ -168,7 +188,8 @@ export function applyEdits(
   edits: UserEdits,
   viewerTimeZone: string,
 ): AgendaItem[] {
-  const decided = items.map((item): AgendaItem => {
+  const decided = items.map((raw): AgendaItem => {
+    const item = anchored(raw, edits);
     const decision = edits.decisions[item.id];
     if (decision === undefined) return item;
     if (decision.action === "ignore") return { ...item, place: "ignored", decision };
@@ -320,6 +341,7 @@ export function phaseOf(item: AgendaItem, nowMs: number): Phase {
   const utc = item.result.when?.utc;
   if (utc === undefined) return "active";
   const at = Date.parse(utc);
-  const grace = item.result.dueType === "deadline" ? 0 : IN_PROGRESS_MS;
+  // 只知道日期的：那一整天都算还没过
+  const grace = item.result.dueType === "deadline" ? 0 : item.result.dueType === "date_only" ? 86_400_000 : IN_PROGRESS_MS;
   return at + grace < nowMs ? "overdue" : "active";
 }

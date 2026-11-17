@@ -32,6 +32,11 @@ async function setup() {
   return { ...fake, env };
 }
 
+/** 作者账号现在用的日历口令（直接从库里读）。 */
+function ownerToken(fake: { all<T = Record<string, unknown>>(sql: string): T[] }): string {
+  return fake.all<{ calendar_token: string }>("SELECT calendar_token FROM users WHERE role = 'owner'")[0]!.calendar_token;
+}
+
 describe("日历订阅", () => {
   it("口令不对：一律 404，不透露任何东西", async () => {
     const { env } = await setup();
@@ -41,9 +46,10 @@ describe("日历订阅", () => {
     expect(junk.status).toBe(404);
   });
 
-  it("口令对：返回日程里有时刻的事；删掉的信不再出现；升级前的旧链接（由密码算出的）照常能用", async () => {
-    const { env } = await setup();
-    const token = await calendarToken(PASSWORD);
+  it("口令对：返回日程里有时刻的事；删掉的信不再出现", async () => {
+    const fake = await setup();
+    const { env } = fake;
+    const token = ownerToken(fake);
     const res = await handleCalendar(new Request(`https://board.example/cal/${token}.ics`), env, NOW);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/calendar");
@@ -64,10 +70,11 @@ describe("日历订阅", () => {
   });
 
   it("换一个新链接：新链接能用，旧链接立刻 404", async () => {
-    const { env } = await setup();
+    const fake = await setup();
+    const { env } = fake;
     const login = await handleApi(new Request("https://board.example/api/login", { method: "POST", body: JSON.stringify({ password: PASSWORD }), headers: { "cf-connecting-ip": "1.1.1.1" } }), env, NOW);
     const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
-    const old = await calendarToken(PASSWORD);
+    const old = ownerToken(fake);
     const res = await handleApi(new Request("https://board.example/api/calendar/reset", { method: "POST", headers: { cookie } }), env, NOW);
     const { url } = (await res.json()) as { url: string };
     expect(url).not.toContain(old);
@@ -76,19 +83,21 @@ describe("日历订阅", () => {
   });
 
   it("看板里拿到的订阅链接就是这个口令", async () => {
-    const { env } = await setup();
+    const fake = await setup();
+    const { env } = fake;
     const login = await handleApi(new Request("https://board.example/api/login", { method: "POST", body: JSON.stringify({ password: PASSWORD }), headers: { "cf-connecting-ip": "1.1.1.1" } }), env, NOW);
     const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
     const res = await handleApi(new Request("https://board.example/api/calendar", { headers: { cookie } }), env, NOW);
     const { url } = (await res.json()) as { url: string };
-    expect(url).toBe(`https://board.example/cal/${await calendarToken(PASSWORD)}.ics`);
+    expect(url).toBe(`https://board.example/cal/${ownerToken(fake)}.ics`);
   });
 
   it("提醒提前量：设置里改了，日历跟着变；乱填的值存不进去", async () => {
-    const { env } = await setup();
+    const fake = await setup();
+    const { env } = fake;
     const login = await handleApi(new Request("https://board.example/api/login", { method: "POST", body: JSON.stringify({ password: PASSWORD }), headers: { "cf-connecting-ip": "1.1.1.1" } }), env, NOW);
     const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
-    const token = await calendarToken(PASSWORD);
+    const token = ownerToken(fake);
     const ics = async () => (await handleCalendar(new Request(`https://board.example/cal/${token}.ics`), env, NOW)).text();
     expect(await ics()).toContain("TRIGGER:-PT30M");
 
@@ -104,5 +113,53 @@ describe("日历订阅", () => {
     const got = (await (await handleApi(new Request("https://board.example/api/prefs", { headers: { cookie } }), env, NOW)).json()) as { prefs: unknown };
     expect(got.prefs).toEqual({ version: 1, calendar: { fixedAlarm: 60, deadlineAlarm: null, emailReminders: true }, timeZones: { home: null, job: null }, deviceZone: null });
     expect((await handleApi(new Request("https://board.example/api/prefs"), env, NOW)).status).toBe(401);
+  });
+});
+
+/**
+ * 日历口令不能由看板密码算出来（2026-11-14 审查）。
+ *
+ * 订阅链接要交给 Google / 苹果的日历服务，它一旦泄露，「由密码算出来」就等于给了别人一个
+ * 可以离线反复试密码的靶子；没设 SESSION_SECRET 时，这个密码还是所有登录凭据的签名钥匙。
+ */
+describe("日历口令和看板密码无关", () => {
+  it("新建的作者账号：口令是随机的；由密码算出来的那条链接打不开", async () => {
+    const fake = await setup();
+    const derived = await calendarToken(PASSWORD);
+    expect(ownerToken(fake)).not.toBe(derived);
+    expect(ownerToken(fake)).toMatch(/^[0-9a-f]{40}$/);
+    expect((await handleCalendar(new Request(`https://board.example/cal/${derived}.ics`), fake.env, NOW)).status).toBe(404);
+  });
+
+  it("老账号还在用由密码算出来的口令：链接照常能用，看板标出来；换新链接后不再标，旧链接 404", async () => {
+    const fake = await setup();
+    const { env } = fake;
+    const derived = await calendarToken(PASSWORD);
+    fake.exec("UPDATE users SET calendar_token = ? WHERE role = 'owner'", derived);
+    const login = await handleApi(new Request("https://board.example/api/login", { method: "POST", body: JSON.stringify({ password: PASSWORD }), headers: { "cf-connecting-ip": "1.1.1.1" } }), env, NOW);
+    const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
+    const get = async () => (await (await handleApi(new Request("https://board.example/api/calendar", { headers: { cookie } }), env, NOW)).json()) as { url: string; derivedFromPassword: boolean };
+
+    // 不替你换：换了已订阅的日历会悄悄停止更新，提醒就没了
+    const before = await get();
+    expect(before.url).toContain(derived);
+    expect(before.derivedFromPassword).toBe(true);
+    expect((await handleCalendar(new Request(before.url), env, NOW)).status).toBe(200);
+
+    const reset = (await (await handleApi(new Request("https://board.example/api/calendar/reset", { method: "POST", headers: { cookie } }), env, NOW)).json()) as { url: string; derivedFromPassword: boolean };
+    expect(reset.derivedFromPassword).toBe(false);
+    expect((await get()).derivedFromPassword).toBe(false);
+    expect((await handleCalendar(new Request(`https://board.example/cal/${derived}.ics`), env, NOW)).status).toBe(404);
+  });
+
+  it("没设看板密码：谈不上由密码推导", async () => {
+    const fake = await setup();
+    const { BOARD_PASSWORD: _unset, ...rest } = fake.env;
+    const env: Env & { SESSION_SECRET: string } = { ...rest, SESSION_SECRET: "s".repeat(32) };
+    const { issueSession } = await import("../src/auth.js");
+    const ownerId = fake.all<{ id: string }>("SELECT id FROM users WHERE role = 'owner'")[0]!.id;
+    const session = await issueSession(env.SESSION_SECRET, ownerId, NOW);
+    const res = await handleApi(new Request("https://board.example/api/calendar", { headers: { cookie: `it_session=${session.value}` } }), env, NOW);
+    expect(((await res.json()) as { derivedFromPassword: boolean }).derivedFromPassword).toBe(false);
   });
 });

@@ -23,8 +23,8 @@ export { classifyEventType } from "./eventType";
 export type { EventTypeSignals, EventTypeClassification } from "./eventType";
 export { classifyEventFormat } from "./eventFormat";
 export type { EventFormat, EventFormatClassification } from "./eventFormat";
-export { extractActionInfo, extractCredentials, extractLinks } from "./actionInfo";
-export type { ActionInfo, Credential } from "./actionInfo";
+export { extractActionInfo, extractCredentials, extractLinkDetails, extractLinks, linkKindRank } from "./actionInfo";
+export type { ActionInfo, Credential, LinkDetail, LinkKind } from "./actionInfo";
 export { classifyDue, classifyDueFromSignals } from "./dueType";
 export type { DueClassification } from "./dueType";
 export { buildDedupKey, dedupKeyOf, foldEvents, mergeEvent, toStoredEvent } from "./dedup";
@@ -37,3 +37,4 @@ export {
   zoneAbbr,
 } from "./timezone";
 export type { DualDisplay, TimeZoneInference, TimeZoneSignals } from "./timezone";
+export { decodeHtmlEntities } from "./text";

@@ -1,9 +1,10 @@
 import type { AgendaItem } from "../../web/lib/demo/agenda";
 import { reminderZone } from "../../web/lib/demo/boardPrefs";
-import { formatWallClock, zoneLabel } from "../../web/lib/demo/parseDemo";
+import { formatWallClock, linkDetailsOf, linkLabel, splitLinks, zoneLabel } from "../../web/lib/demo/parseDemo";
 import { inboxDomain } from "./accounts.js";
 import { loadAgenda } from "./agendaData.js";
 import { systemSender } from "./inbox.js";
+import { bump } from "./stats.js";
 import type { Env } from "./types.js";
 
 /**
@@ -140,7 +141,10 @@ function blockOf(r: Reminder, nowMs: number, homeZone: string): Block {
     rows.push({ label: "当地", value: `${formatWallClock(utc, result.timeZone)}（${zoneLabel(result.timeZone)}）` });
   }
   if (result.role) rows.push({ label: "岗位", value: result.role });
-  for (const link of result.links.slice(0, 3)) rows.push({ label: "链接", value: link, href: link });
+  // 只放入口和「确认参加」：练习题、下载地址在准点详情里
+  for (const link of splitLinks(linkDetailsOf(result)).main.slice(0, 3)) {
+    rows.push({ label: linkLabel(link), value: link.url, href: link.url });
+  }
   for (const c of result.credentials) rows.push({ label: c.label, value: c.value });
   if (r.item.note) {
     const note = r.item.note.length > MAX_NOTE_CHARS ? `${r.item.note.slice(0, MAX_NOTE_CHARS)}…（全文在准点里）` : r.item.note;
@@ -219,10 +223,12 @@ export async function runReminders(env: Env, nowMs: number): Promise<ReminderRun
       for (const r of due) {
         await env.DB.prepare("INSERT OR IGNORE INTO reminders_sent (user_id, key, sent_at) VALUES (?, ?, ?)").bind(user.id, r.key, at).run();
       }
+      await bump(env, nowMs, user.id, "reminder_mail");
       run.mails += 1;
       run.items += due.length;
     } catch (error) {
       run.failed += 1;
+      await bump(env, nowMs, user.id, "reminder_failed");
       console.log(JSON.stringify({ reminderFailed: { user: user.id, error: error instanceof Error ? error.message : String(error) } }));
     }
   }

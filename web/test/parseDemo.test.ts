@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { buildSampleEmails, cnMonthDay, enDate, isoMinute } from "@/lib/demo/sampleEmails";
 import {
   collectAccess,
+  linkDetailsOf,
+  linkLabel,
+  splitLinks,
   displayRole,
   formatWallClock,
   kindLabelOf,
@@ -547,9 +550,38 @@ describe("入口链接与密钥", () => {
     const [exam, reminder] = await Promise.all([parse("fixed-exam"), parse("reminder")]);
     expect(reminder.credentials).toEqual([]);
     expect(collectAccess([exam, reminder, undefined, exam])).toEqual({
-      links: ["https://exam.xinghe-tech.example/s/ba-kq7"],
+      links: [{ url: "https://exam.xinghe-tech.example/s/ba-kq7", kind: "entry", label: "考试入口" }],
       credentials: [{ label: "考试码", value: "XHKJ-7Q4M" }],
     });
+  });
+});
+
+describe("一封信好几个链接", () => {
+  const confirm = { url: "https://hr.example/s/c1", kind: "confirm", label: "确认是否参加考试" } as const;
+  const entry = { url: "https://hr.example/s/e1", kind: "entry", label: "考试地址" } as const;
+  const practice = { url: "https://oj.example/practice", kind: "practice", label: "考前模拟题库" } as const;
+  const other = { url: "https://corp.example/about", kind: "other", label: null } as const;
+
+  it("老数据没有 linkDetails：第一个当入口，其余看不出", () => {
+    expect(linkDetailsOf({ links: ["https://a.example/1", "https://a.example/2"] })).toEqual([
+      { url: "https://a.example/1", kind: "entry", label: null },
+      { url: "https://a.example/2", kind: "other", label: null },
+    ]);
+  });
+
+  it("入口和确认摆出来，练习收起来", () => {
+    expect(splitLinks([entry, confirm, practice, other])).toEqual({ main: [entry, confirm], more: [practice, other] });
+  });
+
+  it("没有入口时退回第一个看不出用途的；只有练习就什么都不摆", () => {
+    expect(splitLinks([practice, other]).main).toEqual([other]);
+    expect(splitLinks([practice]).main).toEqual([]);
+  });
+
+  it("显示名：信里的叫法优先，看不出就用通用名", () => {
+    expect(linkLabel(entry)).toBe("考试地址");
+    expect(linkLabel(other)).toBe("链接");
+    expect(linkLabel({ ...entry, label: null })).toBe("入口链接");
   });
 });
 

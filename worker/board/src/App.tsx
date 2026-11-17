@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Board } from "@/components/demo/Board";
+import { CardHints } from "@/components/demo/EventCard";
 import { DEFAULT_PREFS, effectiveHomeZone, parsePrefs } from "@/lib/demo/boardPrefs";
 import type { BoardPrefs, TimeZonePrefs } from "@/lib/demo/boardPrefs";
 import { EMPTY_EDITS, parseEdits } from "@/lib/demo/userEdits";
 import type { PrepOutput } from "@/lib/demo/prep";
 import type { QuickModelOutput } from "@/lib/demo/quickAdd";
 import type { UserEdits } from "@/lib/demo/userEdits";
-import { extractorNote, forwardingNotices, noticeGroupIds, toLiveData } from "./live";
+import { emailCountNotice, extractorNote, forwardingNotices, noticeGroupIds, saveOutcome, toLiveData } from "./live";
 import { ForwardingNotices } from "./ForwardingNotices";
-import { ForwardSetup, SetupWizard } from "./ForwardSetup";
+import { ForwardSetup, isProvider, SetupWizard } from "./ForwardSetup";
 import type { Provider } from "./ForwardSetup";
 import { EmailGuide } from "./EmailGuide";
 import { Login } from "./Login";
 import { healthWarning, privateSettings } from "./PrivateSettings";
 import { parseSession, SessionContext } from "./session";
 import type { SessionData } from "./session";
+import { SourceQuestion } from "./SourceQuestion";
 import { TimeZoneOnboarding } from "./TimeZoneSettings";
 import type { EmailRow, NoticeRow } from "./live";
 
@@ -70,10 +72,10 @@ function Centered({ children }: { children: React.ReactNode }) {
 type Load =
   | { state: "loading" }
   | { state: "error"; message: string }
-  | { state: "ready"; rows: EmailRow[]; notices: NoticeRow[]; edits: UserEdits };
+  | { state: "ready"; rows: EmailRow[]; /** 云端一共存了多少封；老服务端不给时为 null。 */ total: number | null; notices: NoticeRow[]; edits: UserEdits };
 
 /** 存手动操作的状态：页面右下角给一个小提示，失败了要让你知道，不能悄悄丢。 */
-type SaveState = "idle" | "saving" | "saved" | "failed";
+type SaveState = "idle" | "saving" | "saved" | "failed" | "conflict";
 
 function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => void }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -84,13 +86,17 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
   const [prefsFailed, setPrefsFailed] = useState(false);
   const viewerTimeZone = prefs === null ? deviceZone : effectiveHomeZone(prefs.timeZones, deviceZone);
   /** 改了求职地之后按新设置重算已收到的邮件：进度 / 结果的一句话。 */
-  const [reparse, setReparse] = useState<{ busy: boolean; text: string; mode: "zone" | "model" } | null>(null);
+  const [reparse, setReparse] = useState<{ busy: boolean; text: string; mode: "zone" | "model" | "rules" } | null>(null);
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [saveState, setSaveState] = useState<SaveState>("idle");
   /** 自动转发设置向导：还没收到过信时，登录后弹一次（叉掉就关，这次登录不再自己弹）；page 是翻到第几页。 */
   const [wizard, setWizard] = useState<{ open: boolean; page: number; shown: boolean; provider: Provider | null }>({ open: false, page: 0, shown: false, provider: null });
   /** 保存排队：上一次没存完又改了，只把最新的那份再存一次，顺序不会乱。 */
   const saving = useRef<{ busy: boolean; next: UserEdits | null }>({ busy: false, next: null });
+  /** 页面上这份手动操作是在云端哪个版本上改的；null = 不知道（老服务端），保存时就不带版本号。 */
+  const editsVersion = useRef<string | null>(null);
+  /** 云端那份把页面上的换掉了几次（别处先改过）。每换一次，看板清空「撤销」记录：那些记录是照着旧的那份记的。 */
+  const [editsReplaced, setEditsReplaced] = useState(0);
 
   /** 刷新按钮的反馈：正在刷新、刷新完新增了几封、失败了。没有反馈的按钮点了等于没点。 */
   const [refreshState, setRefreshState] = useState<{ busy: boolean; text: string | null }>({ busy: false, text: null });
@@ -103,15 +109,18 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
       lastRefreshAt.current = Date.now();
       setNowMs(Date.now());
       Promise.all([
-        api<{ emails: EmailRow[] }>("/api/emails"),
+        api<{ emails: EmailRow[]; total?: number }>("/api/emails"),
         api<{ notices: NoticeRow[] }>("/api/notices"),
-        api<{ edits: unknown }>("/api/edits"),
+        api<{ edits: unknown; version?: string }>("/api/edits"),
       ]).then(
         ([emails, notices, edits]) => {
           const fresh = edits.edits === null ? EMPTY_EDITS : parseEdits(edits.edits);
+          // 正在保存时不采用云端这份（见下），版本号也就不能跟着换
+          if (!saving.current.busy && saving.current.next === null) editsVersion.current = typeof edits.version === "string" ? edits.version : null;
           setLoad((current) => ({
             state: "ready",
             rows: emails.emails,
+            total: typeof emails.total === "number" ? emails.total : null,
             notices: notices.notices,
             // 你刚做的操作还没存完时，以页面上的为准，别被云端那份旧的盖回去
             edits: current.state === "ready" && (saving.current.busy || saving.current.next !== null) ? current.edits : fresh,
@@ -149,6 +158,15 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
     if (noMailYet && zonesReady && !wizard.shown) setWizard((w) => ({ ...w, open: true, page: 0, shown: true }));
   }, [noMailYet, zonesReady, wizard.shown]);
   const closeWizard = useCallback(() => setWizard((w) => ({ ...w, open: false })), []);
+  // 「把步骤发到我邮箱」那封信里的链接：?setup=gmail 之类，打开后直接从那家邮箱的第 1 步开始
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const provider = url.searchParams.get("setup");
+    if (!isProvider(provider)) return;
+    url.searchParams.delete("setup");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    setWizard({ open: true, page: 1, shown: true, provider });
+  }, []);
 
   useEffect(() => {
     api<{ prefs: unknown }>("/api/prefs").then(
@@ -175,10 +193,16 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
    * 一批一批重判已存的邮件，做完刷新一次。
    * zone：改了求职地，按现在的规则和设置重判（不调模型，不花钱）。
    * model：收信时模型没响应、只用了规则的那几封，重新调用模型摘一遍（花这几封的钱）。
+   * rules：作者用。引擎规则改了，所有人已收到的信按新规则重判（不调模型，不花钱）。
    */
   const runReparse = useCallback(
-    async (mode: "zone" | "model") => {
-      const doing = mode === "zone" ? "正在按新的求职地重算已收到的邮件…" : "正在用 AI 重新解析当时没响应的邮件…";
+    async (mode: "zone" | "model" | "rules") => {
+      const doing =
+        mode === "zone"
+          ? "正在按新的求职地重算已收到的邮件…"
+          : mode === "rules"
+            ? "正在按最新规则重新整理所有人的邮件…"
+            : "正在用 AI 重新解析当时没响应的邮件…";
       let after: string | null = null;
       let checked = 0;
       let changed = 0;
@@ -189,7 +213,7 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
           const r: { next: string | null; checked: number; changed: number; failed?: number } = await api("/api/reparse", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(mode === "model" ? { after, retryModel: true } : { after }),
+            body: JSON.stringify(mode === "model" ? { after, retryModel: true } : mode === "rules" ? { after, allUsers: true } : { after }),
           });
           checked += r.checked;
           changed += r.changed;
@@ -199,7 +223,7 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
         } while (after !== null);
         // 还没有信（新用户刚选完求职地）：没什么可重算的，不打扰
         if (checked === 0) {
-          setReparse(null);
+          setReparse(mode === "rules" ? { mode, busy: false, text: "还没有可以整理的邮件。" } : null);
           return;
         }
         setReparse({
@@ -208,7 +232,9 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
           text:
             mode === "zone"
               ? `已按新的求职地重算 ${checked} 封邮件，${changed} 封的结论有变化。`
-              : `已用 AI 重新解析 ${checked} 封，${changed} 封的结论有变化。${failed > 0 ? `其中 ${failed} 封 AI 这次还是没响应，稍后可以再试。` : ""}`,
+              : mode === "rules"
+                ? `已按最新规则重新整理 ${checked} 封邮件（所有账号），${changed} 封的日程结论有变化；链接名称这类细节也一并更新了。`
+                : `已用 AI 重新解析 ${checked} 封，${changed} 封的结论有变化。${failed > 0 ? `其中 ${failed} 封 AI 这次还是没响应，稍后可以再试。` : ""}`,
         });
         refresh("manual");
       } catch (error) {
@@ -219,7 +245,9 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
           text:
             mode === "zone"
               ? `重算没做完（已处理 ${checked} 封），刷新页面后在「设置 → 时区」里再选一次求职地即可接着做。`
-              : `没做完（已处理 ${checked} 封），刷新页面后在「设置 → 收信」里再点一次即可接着做。`,
+              : mode === "rules"
+                ? `没做完（已处理 ${checked} 封），刷新页面后在「设置 → 收信」里再点一次「按最新规则重新整理」即可。`
+                : `没做完（已处理 ${checked} 封），刷新页面后在「设置 → 收信」里再点一次即可接着做。`,
         });
       }
     },
@@ -265,12 +293,33 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
       setSaveState("saving");
       let current: UserEdits | null = edits;
       try {
+        let conflicted = false;
         while (current !== null) {
           queue.next = null;
-          await api("/api/edits", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(current) });
+          const base = editsVersion.current;
+          const res = await fetch("/api/edits", {
+            method: "PUT",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json", ...(base === null ? {} : { "x-edits-base": base }) },
+            body: JSON.stringify(current),
+          });
+          const outcome = saveOutcome(res.status, await res.json().catch(() => ({})));
+          if (outcome.kind === "signed-out") throw new Unauthorized("请先登录");
+          if (outcome.kind === "failed") throw new Error("保存失败");
+          if (outcome.kind === "conflict") {
+            // 别处先改过了：云端没动。把云端那份换到页面上，刚才这一步（和排在后面的）不存，由你再做一次
+            const theirs = outcome.edits === null ? EMPTY_EDITS : parseEdits(outcome.edits);
+            editsVersion.current = outcome.version;
+            queue.next = null;
+            setLoad((now) => (now.state === "ready" ? { ...now, edits: theirs } : now));
+            setEditsReplaced((n) => n + 1);
+            conflicted = true;
+            break;
+          }
+          editsVersion.current = outcome.version;
           current = queue.next;
         }
-        setSaveState("saved");
+        setSaveState(conflicted ? "conflict" : "saved");
       } catch (error) {
         if (error instanceof Unauthorized) onSignedOut();
         setSaveState("failed");
@@ -348,11 +397,13 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
   const modelFailed = load.rows.filter((r) => r.status === "parsed" && (r.error ?? "").startsWith("模型调用失败")).length;
 
   return (
+    <CardHints.Provider value={{ eveReminder: prefs.calendar.emailReminders }}>
     <div>
       <Board
         samples={live.samples}
         results={live.results}
         edits={load.edits}
+        editsReplaced={editsReplaced}
         onEditsChange={onEditsChange}
         nowMs={nowMs}
         viewerTimeZone={viewerTimeZone}
@@ -402,6 +453,8 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
             modelFailed,
             reparseBusy: reparse?.busy ?? false,
             onRetryModel: () => void runReparse("model"),
+            onReparseAll: () => void runReparse("rules"),
+            onCalendarSaved: (calendar) => setPrefs((current) => (current === null ? current : { ...current, calendar })),
           });
           return { settingsGroups: groups, settingsAccount: account };
         })()}
@@ -411,10 +464,12 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
           setLoad((current) => (current.state === "ready" ? { ...current, rows: current.rows.filter((r) => !ids.includes(r.id)) } : current));
         }}
         notice={[
-          emailCount === 0 ? `还没有收到邮件（招聘邮件转发到 ${inbox} 就会出现在这里）` : `${emailCount} 封转发来的邮件`,
+          emailCountNotice(emailCount, load.total, inbox),
           "你的确认、忽略、手动添加存在云端，换设备也在。",
         ].join(" · ")}
-        extractorNoteFor={(ids) => extractorNote(live.models, ids)}
+        noticeHiddenOnPhone
+        extractorNoteFor={(ids) => extractorNote(live.models, ids, live.errors)}
+        todayBanner={<SourceQuestion />}
         banner={
           // 顶上的一行行提醒，可以同时有好几条
           <>
@@ -485,14 +540,21 @@ function LiveBoard({ inbox, onSignedOut }: { inbox: string; onSignedOut: () => v
         />
       ) : null}
     </div>
+    </CardHints.Provider>
   );
 }
 
 function SaveHint({ state }: { state: SaveState }) {
   if (state === "idle") return null;
-  const text = { saving: "保存中…", saved: "已保存到云端", failed: "保存失败：刷新后再试一次" }[state];
+  const text = {
+    saving: "保存中…",
+    saved: "已保存到云端",
+    failed: "保存失败：刷新后再试一次",
+    conflict: "别处（另一台设备或另一个页面）刚改过：已换成最新的，你刚才那一步没有保存，请再做一次",
+  }[state];
+  const loud = state === "failed" || state === "conflict";
   return (
-    <span role={state === "failed" ? "alert" : "status"} className={state === "failed" ? "text-on-drop-soft" : undefined}>
+    <span role={loud ? "alert" : "status"} className={loud ? "text-on-drop-soft" : undefined}>
       {text}
     </span>
   );

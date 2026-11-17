@@ -206,7 +206,7 @@ function UpcomingChart({ days }: { days: readonly DayLoad[] }) {
       <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-soft">
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm bg-chart-2" aria-hidden />
-          要准点到
+          要按时到
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm bg-chart-1" aria-hidden />
@@ -219,6 +219,8 @@ function UpcomingChart({ days }: { days: readonly DayLoad[] }) {
         <ul className="mt-3 flex items-end gap-1">
           {days.map((day, index) => {
             const sum = day.fixed + day.deadline;
+            // 手机上 14 根柱子的日期挤不下：隔一天写一个（每月 1 日照写）
+            const thin = index % 2 === 1 && !day.label.endsWith("/1") ? "invisible sm:visible" : "";
             return (
               <li
                 key={day.dateKey}
@@ -239,10 +241,10 @@ function UpcomingChart({ days }: { days: readonly DayLoad[] }) {
                   ) : null}
                 </div>
                 {/* 14 根柱子挤不下「10/14」：只写日，月份只在第一根和每月 1 日出现 */}
-                <span className="tabular mt-1.5 text-[11px] whitespace-nowrap text-ink-faint">
+                <span className={`tabular mt-1.5 text-[11px] whitespace-nowrap text-ink-faint ${thin}`}>
                   {index === 0 || day.label.endsWith("/1") ? day.label : day.label.split("/")[1]}
                 </span>
-                <span className="text-[10px] text-ink-faint">{day.weekday.slice(1)}</span>
+                <span className={`text-[10px] text-ink-faint ${thin}`}>{day.weekday.slice(1)}</span>
                 <span className="sr-only">
                   准点 {day.fixed} 件，截止 {day.deadline} 件
                 </span>

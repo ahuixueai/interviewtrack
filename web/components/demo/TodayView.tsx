@@ -118,7 +118,7 @@ export function TodayView({
 
       <section aria-label="要你处理的" data-today="todo">
         <h2 className="text-sm font-semibold text-ink">要你处理的</h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
           <Tile label="7 天内的安排" value={thisWeek} hint={undated > 0 ? `另有 ${undated} 件没写具体时间` : "全部在日程里"} onClick={() => onGo("agenda")} action="go-agenda" />
           <Tile label="该跟进了" value={followUps} hint="跟进日期已到的投递" onClick={() => onGo("applications", "followup")} action="go-followup" />
           <Tile label="等你确认" value={pending} hint="系统拿不准、没替你排的事" onClick={() => onGo("pending")} action="go-pending" />
@@ -135,7 +135,7 @@ function Tile({ label, value, hint, onClick, action }: { label: string; value: n
       type="button"
       onClick={onClick}
       data-action={action}
-      className="group flex flex-col items-start rounded-xl border border-hairline bg-surface p-4 text-left hover:bg-raised"
+      className="group flex flex-col items-start rounded-xl border border-hairline bg-surface p-3 text-left hover:bg-raised sm:p-4"
     >
       <span className="text-xs text-ink-soft">{label}</span>
       <span className="tabular mt-1 text-2xl font-semibold text-ink">{value}</span>

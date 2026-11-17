@@ -80,6 +80,33 @@ const EN_YOU_HAVE =
 const EN_FROM_RECEIPT =
   /\b(\d{1,3})\s*(business\s+day|working\s+day|day|hour|hr|week)s?\s+from\s+(?:receipt|the\s+date\s+of\s+this\s+email|this\s+email)/gi;
 
+/**
+ * 不写数字的说法：「complete this assessment in the next week」「within one week」「within a week」
+ * 「over the next 3 days」。没写数就是 1（the next week = 1 周）。
+ * 和 EN_BARE_IN 一样要全文有期限语气词才算。
+ */
+const EN_WORD_NUM: Readonly<Record<string, number>> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, fourteen: 14,
+};
+const EN_NEXT =
+  /\b(?:in|within|over|during)\s+the\s+next\s+(?:(\d{1,3}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|fourteen)\s+)?(business\s+day|working\s+day|day|hour|week)s?\b/gi;
+const EN_WITHIN_WORD =
+  /\bwithin\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|fourteen)\s+(business\s+day|working\s+day|day|hour|week)s?\b/gi;
+
+/** 「We will get back to you within one week」：说的是招聘方多久回你，不是你的期限。 */
+const EN_SENDER_PROMISE = /\b(?:we|we['’]ll|our\s+team|hear\s+(?:back|from)|get\s+back|reach\s+out|contact\s+you|notify\s+you|update\s+you)\b/i;
+
+function enSentenceAt(text: string, index: number): string {
+  const start = Math.max(text.lastIndexOf(".", index), text.lastIndexOf("\n", index)) + 1;
+  return text.slice(start, index);
+}
+
+function enCount(word: string | undefined): number {
+  if (word === undefined || word.length === 0) return 1;
+  const n = Number(word);
+  return Number.isFinite(n) ? n : (EN_WORD_NUM[word.toLowerCase()] ?? 0);
+}
+
 /** 「in N days」前面是 start/begin 时说的是开始，不是截止。 */
 const START_VERB = /\b(start|starts|starting|begin|begins|beginning|commences?)\s*$/i;
 /**
@@ -214,6 +241,12 @@ export function findRelativeDeadline(text: string): RelativeHit | null {
   }
 
   if (EN_DEADLINE_HINT.test(text)) {
+    for (const pattern of [EN_NEXT, EN_WITHIN_WORD]) for (const m of text.matchAll(pattern)) {
+      const count = enCount(m[1]);
+      if (count <= 0 || EN_SENDER_PROMISE.test(enSentenceAt(text, m.index))) continue;
+      const hit = unitToHit(count, m[2] ?? "day", m[0]);
+      if (hit) found.push(hit);
+    }
     for (const m of text.matchAll(EN_BARE_IN)) {
       // 前面是 starts / begins 的，说的是事件开始时刻，不是截止
       if (START_VERB.test(text.slice(Math.max(0, m.index - 14), m.index))) continue;

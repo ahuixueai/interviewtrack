@@ -1,5 +1,7 @@
 import { codeHash, sameString, signingSecret } from "./auth.js";
-import { calendarToken } from "./calendar.js";
+import { saveSignup } from "./growth.js";
+import type { Signup } from "./growth.js";
+import { bump } from "./stats.js";
 import type { Env } from "./types.js";
 
 /**
@@ -69,12 +71,12 @@ export function registrationOpen(env: Env): boolean {
   return env.REGISTRATION !== "closed";
 }
 
-function maxUsers(env: Env): number {
+export function maxUsers(env: Env): number {
   const n = Number(env.MAX_USERS);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_USERS;
 }
 
-async function userCount(env: Env): Promise<number> {
+export async function userCount(env: Env): Promise<number> {
   const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
   return row?.n ?? 0;
 }
@@ -142,7 +144,8 @@ export async function userByInboxToken(env: Env, token: string): Promise<User | 
 
 /**
  * 作者账号：没有就建一个。
- * 日历口令沿用以前「由看板密码算出来」的那个——已经订阅的日历不用重订。
+ * 日历口令和所有人一样是随机的（11/16 起）：不再由看板密码算——订阅链接要交给日历服务，
+ * 它泄露了不能连带把密码变成可以离线试的东西。已有账号的口令不动，见 calendar.ts 的 derivedFromPassword。
  */
 export async function ensureOwner(env: Env, nowMs: number): Promise<User | null> {
   const email = normalizeEmail(env.OWNER_EMAIL);
@@ -153,8 +156,7 @@ export async function ensureOwner(env: Env, nowMs: number): Promise<User | null>
   if (existing) {
     await env.DB.prepare("UPDATE users SET inbox_token = ? WHERE id = ?").bind(newInboxToken(), existing.id).run();
   } else {
-    const legacy = env.BOARD_PASSWORD && env.BOARD_PASSWORD.length > 0 ? await calendarToken(env.BOARD_PASSWORD) : randomHex(20);
-    await createUser(env, email, "owner", nowMs, legacy);
+    await createUser(env, email, "owner", nowMs);
   }
   const owner = await userByEmail(env, email);
   if (owner) await claimLegacyData(env, owner.id);
@@ -285,7 +287,9 @@ export async function requestCode(
   if (send) {
     try {
       await send(email, code);
+      await bump(env, nowMs, user?.id ?? "", "login_code");
     } catch (error) {
+      await bump(env, nowMs, user?.id ?? "", "login_code_failed");
       // 没发出去：这次不算数（不占 60 秒冷却和每小时次数，码也作废），让人能马上重试
       if (row) {
         await env.DB.prepare("UPDATE login_codes SET code_hash = NULL, expires_at = NULL, last_sent_at = ?, window_start = ?, window_sends = ? WHERE email = ?")
@@ -303,7 +307,7 @@ export async function requestCode(
 export type VerifyCodeResult = { kind: "ok"; user: User } | { kind: "wrong"; attemptsLeft: number } | { kind: "expired" };
 
 /** 核对验证码。对了就作废这个码（只能用一次）；错了记一次，满 5 次作废。 */
-export async function verifyCode(env: Env, email: string, code: unknown, nowMs: number): Promise<VerifyCodeResult> {
+export async function verifyCode(env: Env, email: string, code: unknown, nowMs: number, signup?: Signup): Promise<VerifyCodeResult> {
   const row = await env.DB.prepare("SELECT code_hash, expires_at, attempts FROM login_codes WHERE email = ?")
     .bind(email)
     .first<{ code_hash: string | null; expires_at: string | null; attempts: number }>();
@@ -319,7 +323,10 @@ export async function verifyCode(env: Env, email: string, code: unknown, nowMs: 
   }
   await env.DB.prepare("UPDATE login_codes SET code_hash = NULL, expires_at = NULL WHERE email = ?").bind(email).run();
   // 验证通过、还没有账号：现在建（发码时已经确认过注册开着、名额没满）
-  if ((await userByEmail(env, email)) === null && registrationOpen(env)) await createUser(env, email, "member", nowMs);
+  const isNew = (await userByEmail(env, email)) === null && registrationOpen(env);
+  if (isNew) await createUser(env, email, "member", nowMs);
   const user = await userByEmail(env, email);
+  // 新账号：记下从哪来的（统计用，失败不影响登录）
+  if (isNew && user && signup) await saveSignup(env, user.id, signup).catch(() => undefined);
   return user ? { kind: "ok", user } : { kind: "expired" };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, CalendarDays, CircleHelp, House, ListChecks, Mail, Search, Settings, Table2, X } from "lucide-react";
+import { BarChart3, CalendarDays, CircleHelp, Ellipsis, House, ListChecks, Mail, Search, Settings, Table2, X } from "lucide-react";
 import { AgendaView, PendingView } from "@/components/demo/AgendaView";
 import { BrandMark } from "@/components/demo/BrandMark";
 import type { AgendaActions } from "@/components/demo/AgendaView";
@@ -86,8 +86,17 @@ interface Detail {
 /** 正在填的表单：新加一条日程，或确认一件待确认的事。 */
 type FormState =
   | { mode: "add"; dateKey?: string }
-  | { mode: "confirm"; item: AgendaItem }
+  | { mode: "confirm"; item: AgendaItem; focus: "time" | "zone" }
   | { mode: "edit"; item: AgendaItem };
+
+/**
+ * 待确认的事能不能一键放进日程：时间和时区都读出来了，是按时开始或截止。
+ * 缺了的（没读到时间、不知道是哪里的时间）还是要打开表单补。
+ */
+export function readyToConfirm(item: AgendaItem): boolean {
+  const { result } = item;
+  return result.when !== null && result.when.viewer !== null && (result.dueType === "fixed_start" || result.dueType === "deadline");
+}
 
 function newId(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -101,16 +110,25 @@ export interface BoardProps {
   /** 你的手动操作。存在哪里由外面决定（浏览器本地 / 云端）。 */
   edits: UserEdits;
   onEditsChange: (change: (current: UserEdits) => UserEdits) => void;
+  /**
+   * 外面把 edits 整份换掉的次数（私人看板：别的设备先改过，云端那份换了进来）。
+   * 每变一次清空「撤销」记录——它们是照着旧的那份记的，撤回去会把别处的修改一起抹掉。
+   */
+  editsReplaced?: number;
   nowMs: number;
   viewerTimeZone: string;
   /** 标题下面那一行小字。 */
   notice: string;
+  /** 手机上不显示那行小字（私人看板：每页都一样，占地方）。演示站的「数据是虚构的」要一直显示。 */
+  noticeHiddenOnPhone?: boolean;
   /** 详情里「模型和规则各管什么」那句说明。 */
   extractorNoteFor: (sampleIds: readonly string[]) => string;
   /** 侧边栏底部额外的链接。 */
   sidebarFooter?: React.ReactNode;
-  /** 标题上方的提醒条（例如 Gmail 转发验证码）。 */
+  /** 标题上方的提醒条（例如 Gmail 转发验证码）。每一页都显示。 */
   banner?: React.ReactNode;
+  /** 只在「今天」页显示的提醒条（例如「你是从哪知道准点的？」）：不必每页都挂着。 */
+  todayBanner?: React.ReactNode;
   /** 显示「这是广告」（屏蔽发件人）。私人看板打开，演示站不需要。 */
   blockable?: boolean;
   /** 彻底删除邮件（连原文从云端删掉）。只有私人看板有；演示站的回收站只能恢复。 */
@@ -140,12 +158,15 @@ export function Board({
   results: rawResults,
   edits,
   onEditsChange: commit,
+  editsReplaced = 0,
   nowMs,
   viewerTimeZone,
   notice,
+  noticeHiddenOnPhone = false,
   extractorNoteFor,
   sidebarFooter,
   banner,
+  todayBanner,
   blockable = false,
   onPurgeEmails,
   settingsGroups,
@@ -167,17 +188,22 @@ export function Board({
    * 彻底删除不经过这里——那一步删的是云端的原件，撤不回来，所以先要你确认。
    */
   /** 每一步怎么撤：一般是「回到操作前的样子」；等 AI 的那种只撤它自己改的那件事（见 generatePrep）。 */
-  const [undoStack, setUndoStack] = useState<readonly { label: string; revert: (current: UserEdits) => UserEdits }[]>([]);
-  const [toast, setToast] = useState<{ text: string; canUndo: boolean; key: number } | null>(null);
+  const [allUndo, setUndoStack] = useState<readonly { label: string; revert: (current: UserEdits) => UserEdits; epoch: number }[]>([]);
+  // edits 被外面整份换掉（别处先改过）之前记下的那些作废：它们是照着旧的那份记的，撤回去会把别处的修改一起抹掉
+  const undoStack = useMemo(() => allUndo.filter((entry) => entry.epoch === editsReplaced), [allUndo, editsReplaced]);
+  /** goto：提示里带一个「去日程看看」，点了切过去（放进日程之后留在原页，想看再去）。 */
+  const [toast, setToast] = useState<{ text: string; canUndo: boolean; key: number; goto?: View } | null>(null);
   const act = useCallback(
-    (label: string, change: (current: UserEdits) => UserEdits) => {
+    (label: string, change: (current: UserEdits) => UserEdits, goto?: View) => {
       const before = edits;
       commit(change);
-      setUndoStack((stack) => [...stack.slice(-19), { label, revert: () => before }]);
-      setToast({ text: label, canUndo: true, key: Date.now() });
+      setUndoStack((stack) => [...stack.slice(-19), { label, revert: () => before, epoch: editsReplaced }]);
+      setToast({ text: label, canUndo: true, key: Date.now(), ...(goto ? { goto } : {}) });
     },
-    [edits, commit],
+    [edits, commit, editsReplaced],
   );
+  /** 只提示、不改数据的一句话（没有可撤销的东西）。 */
+  const notify = useCallback((text: string) => setToast({ text, canUndo: false, key: Date.now() }), []);
   const undo = useCallback(() => {
     const last = undoStack[undoStack.length - 1];
     if (!last) return;
@@ -262,7 +288,24 @@ export function Board({
               }
             : {}),
       }),
-    onConfirm: (item) => setForm({ mode: "confirm", item }),
+    // 信息齐全的一点就放进去（底部可撤销）；缺时间 / 时区的打开表单，光标停在缺的那一格
+    onConfirm: (item) =>
+      readyToConfirm(item)
+        ? act("已放进日程", (e) => decide(e, item.id, { action: "confirm", kind: null, time: null }), "agenda")
+        : setForm({ mode: "confirm", item, focus: item.result.unzoned ? "zone" : "time" }),
+    onConfirmMany: (items) => {
+      const ready = items.filter(readyToConfirm);
+      const missing = items.length - ready.length;
+      if (ready.length === 0) {
+        notify(`选中的 ${missing} 件都缺时间或时区，要逐条点「放进日程」补上`);
+        return;
+      }
+      act(
+        `已放进日程 ${ready.length} 件${missing > 0 ? `，${missing} 件缺时间或时区，留在这里逐条补` : ""}`,
+        (e) => ready.reduce((acc, item) => decide(acc, item.id, { action: "confirm", kind: null, time: null }), e),
+        "agenda",
+      );
+    },
     onTrack: (item) => act("只记到投递表", (e) => decide(e, item.id, { action: "track" })),
     onIgnore: (items) => act(items.length === 1 ? "已忽略" : `已忽略 ${items.length} 件`, (e) =>
         items.reduce((acc, item) => decide(acc, item.id, { action: "ignore" }), e),
@@ -385,7 +428,9 @@ export function Board({
         value.time.timeKind !== initial.timeKind ||
         (value.time.timeKind !== "none" && value.time.startUtc !== form.item.result.when?.utc);
       const company = form.item.result.company;
-      act("已放进日程", (e) => {
+      act(
+        "已放进日程",
+        (e) => {
         const decided = decide(e, form.item.id, {
           action: "confirm",
           // 没改的部分存 null：沿用系统的判断，引擎以后改进了这部分会跟着变好
@@ -393,10 +438,12 @@ export function Board({
           time: timeChanged ? value.time : null,
         });
         return value.rememberZone ? rememberCompanyZone(decided, company, value.time.timeZone) : decided;
-      });
+        },
+        "agenda",
+      );
     }
+    // 留在原页：待确认里常常一次要处理好几条，放完一条就跳走很烦。提示里有「去日程看看」
     setForm(null);
-    if (view === "pending") setView("agenda");
   };
 
   const detailEmails: DetailEmail[] = (detail?.sampleIds ?? []).flatMap((id) => {
@@ -441,20 +488,41 @@ export function Board({
         return editItem(e, item.id, { note: writePrep(prior?.note ?? null, block), aiPrep: prepHash(block) });
       });
       const label = "已写进备注：AI 面试准备";
-      setUndoStack((stack) => [...stack.slice(-19), { label, revert: (current) => replaceItemEdit(current, item.id, prior) }]);
+      setUndoStack((stack) => [...stack.slice(-19), { label, revert: (current) => replaceItemEdit(current, item.id, prior), epoch: editsReplaced }]);
       setToast({ text: label, canUndo: true, key: Date.now() });
       setPrepState(null);
     } catch (error) {
       setPrepState({ itemId: item.id, busy: false, error: error instanceof Error ? error.message : "生成失败，稍后再试" });
     }
-  }, [prepare, samples, results, nowMs, viewerTimeZone, commit]);
+  }, [prepare, samples, results, nowMs, viewerTimeZone, commit, editsReplaced]);
+
+  // 手机：底部一排 4 个常用视图 +「更多」（其余的收在弹出的列表里）
+  const [moreOpen, setMoreOpen] = useState(false);
+  const go = (id: View) => {
+    setAppFilter(null);
+    setQuery("");
+    setView(id);
+    setMoreOpen(false);
+  };
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMoreOpen(false);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [moreOpen]);
+  const PHONE_MAIN: readonly View[] = ["today", "agenda", "calendar", "emails"];
+  const phoneMain = tabs.filter((tab) => PHONE_MAIN.includes(tab.id));
+  const phoneMore = tabs.filter((tab) => !PHONE_MAIN.includes(tab.id));
+  const inMore = phoneMore.some((tab) => tab.id === view);
 
   return (
     // 外壳：电脑上导航是贴最左边、占满整个高度的竖栏（滚动时不动），右边内容铺满；手机上导航变成顶部一排
     <div className="min-h-dvh md:grid md:grid-cols-[15rem_minmax(0,1fr)]" data-shell>
       <aside
         data-nav-rail
-        className="min-w-0 border-b border-hairline bg-surface px-4 pt-4 pb-3 text-ink md:sticky md:top-0 md:flex md:h-dvh md:flex-col md:overflow-y-auto md:border-r md:border-b-0 md:px-3 md:pt-6 md:pb-5"
+        className="flex min-w-0 items-center justify-between gap-3 border-b border-hairline bg-surface px-4 py-2.5 text-ink md:sticky md:top-0 md:h-dvh md:flex-col md:items-stretch md:justify-start md:gap-0 md:overflow-y-auto md:border-r md:border-b-0 md:px-3 md:pt-6 md:pb-5"
       >
         <div className="flex items-center gap-2.5 px-1 md:px-2">
           <BrandMark size={34} />
@@ -463,17 +531,13 @@ export function Board({
             <span className="text-[11px] text-ink-faint">InterviewTrack</span>
           </span>
         </div>
-        <nav aria-label="视图" className="mt-4 md:mt-7">
+        <nav aria-label="视图" className="hidden md:mt-7 md:block">
           <ul className="flex gap-1 overflow-x-auto pb-1 md:flex-col md:gap-0.5 md:overflow-visible md:pb-0">
             {tabs.map((tab) => (
               <li key={tab.id} className="shrink-0 md:shrink">
                 <button
                   type="button"
-                  onClick={() => {
-                    setAppFilter(null);
-                    setQuery("");
-                    setView(tab.id);
-                  }}
+                  onClick={() => go(tab.id)}
                   aria-current={view === tab.id ? "page" : undefined}
                   data-view-tab={tab.id}
                   className={`relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm whitespace-nowrap md:py-2.5 ${
@@ -493,15 +557,16 @@ export function Board({
             ))}
           </ul>
         </nav>
-        {/* 手机上侧边栏变成顶部一排，底部这些（刷新、退出等）放在那一排下面，不能藏起来 */}
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 px-1 md:mt-auto md:flex-col md:items-start md:border-t md:border-hairline md:px-2 md:pt-4" data-sidebar-footer>
+        {/* 手机上顶部只留一行：左边标志，右边这些（刷新等）；视图切换在底部那一排 */}
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 md:mt-auto md:justify-start md:flex-col md:items-start md:border-t md:border-hairline md:px-2 md:pt-4" data-sidebar-footer>
           {sidebarFooter}
         </div>
       </aside>
 
       {/* 底部留白：撤销提示浮在最下面，滚到底也不挡住最后一行 */}
-      <section className="min-w-0 px-4 pt-6 pb-20 sm:px-6 md:px-8 md:pt-8 xl:px-10" data-view={view}>
+      <section className="min-w-0 px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-6 md:px-8 md:pt-8 md:pb-20 xl:px-10" data-view={view}>
         {banner}
+        {view === "today" && !searching ? todayBanner : null}
         <header className="pb-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-2xl font-semibold text-ink">{searching ? "搜索" : VIEW_TITLE[view]}</h1>
@@ -526,7 +591,7 @@ export function Board({
               ) : null}
             </label>
           </div>
-          <p className="mt-1 text-xs text-ink-faint">{notice}</p>
+          <p className={`mt-1 text-xs text-ink-faint ${noticeHiddenOnPhone ? "hidden sm:block" : ""}`}>{notice}</p>
         </header>
 
         {searching ? (
@@ -604,6 +669,61 @@ export function Board({
         ) : null}
       </section>
 
+      {/* 手机底部标签栏：常用的 4 个 +「更多」。电脑上用左边竖栏，这一排不出现 */}
+      {moreOpen ? <button type="button" aria-label="关闭更多" className="fixed inset-0 z-30 bg-ink/20 md:hidden" onClick={() => setMoreOpen(false)} /> : null}
+      {moreOpen ? (
+        <div className="fixed inset-x-3 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-40 rounded-card border border-hairline bg-surface p-1.5 shadow-lifted md:hidden" data-more-sheet>
+          <ul>
+            {phoneMore.map((tab) => (
+              <li key={tab.id}>
+                <button
+                  type="button"
+                  onClick={() => go(tab.id)}
+                  aria-current={view === tab.id ? "page" : undefined}
+                  data-more-item={tab.id}
+                  className={`flex h-12 w-full items-center gap-3 rounded-lg px-3 text-[15px] [&>svg]:size-5 ${view === tab.id ? "bg-brand-soft font-semibold text-on-brand-soft" : "text-ink hover:bg-raised"}`}
+                >
+                  {tab.icon}
+                  {VIEW_TITLE[tab.id]}
+                  {tab.count !== null ? <span className="tabular ml-auto text-sm text-ink-faint">{tab.count}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <nav aria-label="视图" className="fixed inset-x-0 bottom-0 z-40 border-t border-hairline bg-surface pb-[env(safe-area-inset-bottom)] md:hidden" data-tab-bar>
+        <ul className="grid grid-cols-5">
+          {phoneMain.map((tab) => (
+            <li key={tab.id}>
+              <button
+                type="button"
+                onClick={() => go(tab.id)}
+                aria-current={view === tab.id ? "page" : undefined}
+                data-tab-bar-item={tab.id}
+                className={`flex h-14 w-full flex-col items-center justify-center gap-0.5 text-[11px] [&>svg]:size-5 ${view === tab.id && !moreOpen ? "font-semibold text-on-brand-soft" : "text-ink-faint"}`}
+              >
+                {tab.icon}
+                {VIEW_TITLE[tab.id]}
+              </button>
+            </li>
+          ))}
+          <li>
+            <button
+              type="button"
+              onClick={() => setMoreOpen((open) => !open)}
+              aria-expanded={moreOpen}
+              data-tab-bar-item="more"
+              className={`relative flex h-14 w-full flex-col items-center justify-center gap-0.5 text-[11px] ${inMore || moreOpen ? "font-semibold text-on-brand-soft" : "text-ink-faint"}`}
+            >
+              <Ellipsis size={20} aria-hidden />
+              {inMore && !moreOpen ? VIEW_TITLE[view] : "更多"}
+              {pendingCount > 0 && !inMore ? <span aria-label={`${pendingCount} 件待确认`} className="absolute top-2 left-1/2 ml-2 h-2 w-2 rounded-full bg-accent" /> : null}
+            </button>
+          </li>
+        </ul>
+      </nav>
+
       {detail ? (
         <DetailPanel
           {...(prepare && liveDetailItem && canPrepare(liveDetailItem)
@@ -679,6 +799,7 @@ export function Board({
           title={form.mode === "confirm" ? "放进日程" : form.mode === "edit" ? "编辑" : "添加日程"}
           submitLabel={form.mode === "confirm" ? "确认，放进日程" : form.mode === "edit" ? "保存" : "添加"}
           lockIdentity={form.mode === "confirm"}
+          focus={form.mode === "confirm" ? form.focus : null}
           showNote={form.mode === "edit"}
           renameFrom={form.mode === "edit" && form.item.origin === "email" && form.item.result.company.length > 0 ? form.item.result.company : null}
           rememberFor={form.mode !== "add" && form.item.result.company.length > 0 ? form.item.result.displayCompany || form.item.result.company : null}
@@ -709,12 +830,25 @@ export function Board({
           role="status"
           aria-live="polite"
           data-toast
-          className="fixed inset-x-0 bottom-4 z-60 mx-auto flex w-fit max-w-[calc(100%-2rem)] items-center gap-3 rounded-xl border border-hairline bg-ink px-4 py-2.5 text-sm text-canvas shadow-lifted"
+          className="fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-60 md:bottom-4 mx-auto flex w-fit max-w-[calc(100%-2rem)] items-center gap-3 rounded-xl border border-hairline bg-ink px-4 py-2.5 text-sm text-canvas shadow-lifted"
         >
           <span className="min-w-0 truncate">{toast.text}</span>
           {toast.canUndo && undoStack.length > 0 ? (
             <button type="button" onClick={undo} data-action="undo-last" className="shrink-0 font-semibold underline underline-offset-2">
               撤销
+            </button>
+          ) : null}
+          {toast.goto && toast.goto !== view ? (
+            <button
+              type="button"
+              onClick={() => {
+                setView(toast.goto ?? view);
+                setToast(null);
+              }}
+              data-action="toast-goto"
+              className="shrink-0 font-semibold underline underline-offset-2"
+            >
+              去日程看看
             </button>
           ) : null}
         </div>
